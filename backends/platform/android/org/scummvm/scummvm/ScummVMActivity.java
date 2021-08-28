@@ -22,6 +22,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
+import android.provider.DocumentsContract;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -82,6 +83,7 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 	// SAF related
 	private LinkedHashMap<String, ParcelFileDescriptor> hackyNameToOpenFileDescriptorList;
 	public final static int REQUEST_SAF = 50000;
+	public final static int REQUEST_FOLDER_ACCESS = 50001;
 
 	/**
 	 * Ids to identify an external storage read (and write) request.
@@ -2202,7 +2204,7 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 			return;
 		else {
 			if (requestCode == REQUEST_SAF) {
-				if (resultCode == RESULT_OK && resultData != null && resultData.getData() != null) {
+				if (resultData != null && resultData.getData() != null) {
 					Uri treeUri = resultData.getData();
 					//SharedPreferences sharedPref = getApplicationContext().getSharedPreferences(getApplicationContext().getPackageName() + "_preferences", Context.MODE_PRIVATE);
 					SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
@@ -2211,11 +2213,40 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 					editor.putString(getString(R.string.preference_saf_tree_key), treeUri.toString());
 					editor.apply();
 
+					// TODO ASDF Send back via JNI to ScummVM ConfMan
+					//           Store current SAF key with ConfMan
+					//           We will need to erase it too when erasing keys
+					// TODO ASDF Support more than one SAF keys
 					if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
 						getContentResolver().takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
 					}
 					return;
 				}
+			} else if (requestCode == REQUEST_FOLDER_ACCESS) {
+				// The result data contains a URI for the document or directory that
+				// the user selected.
+				Uri selectedFolderUri = null;
+				if (resultData != null && resultData.getData() != null) {
+					selectedFolderUri = resultData.getData();
+					// Perform operations on the document using its URI.
+					// TODO ASDF get the "context" for this folder selection,
+					//      ie. which path are we currently setting?
+					// Send back via JNI to ScummVM ConfMan
+					// ??? Mark it as URI path (ie. not classic format path starting with /)
+					// TODO ASDF Maybe check if SAF permission is needed (how do we do this?)
+					//              ie. if it's an internal storage location how do we check if it is and thus no SAF key is needed?
+					//              How does an internal storage location URI look like? Is it consistent among vendors?
+					//           If SAF needed, then compare with current stored SAF key(s) (maybe redundant since SAF is needed, thus we don't have a SAF "key" stored)
+					//              Do we compare for finding a starting substring fully matching with our stored SAF keys or do we try to write and check the result?
+					//           Check if maximum number reached? (what is the maximum?)
+					//           If not maximum do the takePersistablePermission for the folder(?)
+					// TODO ASDF We'd need to constantly check if a folder is write-able, since
+					//           storage volume can be removed
+					//           SAF key(s) can be revoked
+					//           Folders can be erased
+					Log.d(ScummVM.LOG_TAG, "Selected Folder URI: " + selectedFolderUri.toString());
+				}
+				return;
 			}
 		}
 	}
@@ -2258,6 +2289,36 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 		return null;
 	}
 
+	// From: https://developer.android.com/training/data-storage/shared/documents-files
+	// Caution: If you iterate through a large number of files within the directory that's accessed using ACTION_OPEN_DOCUMENT_TREE, your app's performance might be reduced.
+	// Access restrictions
+	// On Android 11 (API level 30) and higher, you cannot use the ACTION_OPEN_DOCUMENT_TREE intent action to request access to the following directories:
+	// - The root directory of the internal storage volume.
+	// - The root directory of each SD card volume that the device manufacturer considers to be reliable, regardless of whether the card is emulated or removable. A reliable volume is one that an app can successfully access most of the time.
+	// - The Download directory.
+	// Furthermore, on Android 11 (API level 30) and higher, you cannot use the ACTION_OPEN_DOCUMENT_TREE intent action to request that the user select individual files from the following directories:
+	// - The Android/data/ directory and all subdirectories.
+	// - The Android/obb/ directory and all subdirectories.
+	// TODO can we allow the user to either use ScummVM browser (would that work for the root folder selection though in 11, anyway?) or native (Intent) folder picker?
+	// TODO ASDF Use JNI to launch this if Android OS > ???
+	// TODO ASDF Upon launch of app, set a ConfMan runtime key (via JNI, after checking in Java for OS version etc)
+	//           so that ScummVM knows the Android OS (and other details?),
+	//           and eg. launches this browser over its own
+	//           and also (ASDF) uses the sound code which did not work for certain versions of Android vs others
+	// TODO ASDF -- Unrelated but look more into PK's code for native sound driver
+	// TODO ASDF -- Unrelated but look more into PK's code for isolating Android code more.
+	public void selectDirectoryWithNativeUI(Uri uriToLoad) {
+		// Choose a directory using the system's file picker.
+		Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+
+		// Optionally, specify a URI for the directory that should be opened in
+		// the system file picker when it loads.
+		// TODO ASDF add extra for the specific type of path we are selecting here (eg savepath, extraspath) and domain (specific game id or scummvm)
+		intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uriToLoad);
+
+		startActivityForResult(intent, REQUEST_FOLDER_ACCESS);
+	}
+
 	// A method to revoke SAF granted stored permissions
 	// TODO We need a button or setting to trigger this on user's demand
 	public void clearStorageAccessFrameworkTreeUri() {
@@ -2276,6 +2337,7 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 		SharedPreferences.Editor editor = sharedPref.edit();
 		editor.remove(getString(R.string.preference_saf_tree_key));
 		editor.apply();
+		// TODO ASDF If we store SAF keys to ConfMan, we'd need to clear them up too
 	}
 
 	public File getStorageRootFolder(final File file) {
