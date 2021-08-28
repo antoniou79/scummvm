@@ -747,6 +747,30 @@ jstring JNI::getNativeVersionInfo(JNIEnv *env, jobject self) {
 	return convertToJString(env, Common::U32String(gScummVMVersion));
 }
 
+
+jint JNI::getAndroidSDKVersionId() {
+	// based on: https://stackoverflow.com/a/10511880
+	bool success = true;
+	JNIEnv *env = JNI::getEnv();
+	// VERSION is a nested class within android.os.Build (hence "$" rather than "/")
+	jclass versionClass = env->FindClass("android/os/Build$VERSION");
+	if (NULL == versionClass) {
+		success = false;
+	}
+
+	jfieldID sdkIntFieldID = NULL;
+	if (success) {
+		success = (NULL != (sdkIntFieldID = env->GetStaticFieldID(versionClass, "SDK_INT", "I")));
+	}
+
+	jint sdkInt = 0;
+	if (success) {
+		sdkInt = env->GetStaticIntField(versionClass, sdkIntFieldID);
+//		LOGD("sdkInt = %d", sdkInt);
+	}
+	return sdkInt;
+}
+
 jstring JNI::convertToJString(JNIEnv *env, const Common::U32String &str) {
 	uint len = 0;
 	uint16 *u16str = str.encodeUTF16Native(&len);

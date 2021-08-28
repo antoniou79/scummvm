@@ -121,6 +121,9 @@ OSystem_Android::OSystem_Android(int audio_sample_rate, int audio_buffer_size) :
 			getSystemProperty("ro.build.display.id").c_str(),
 			getSystemProperty("ro.build.version.sdk").c_str(),
 			getSystemProperty("ro.product.cpu.abi").c_str());
+	// JNI::getAndroidSDKVersionId() should be identical to the result from ("ro.build.version.sdk"),
+	// though getting it via JNI is maybe the most reliable option (?)
+	LOGI("SDK Version: %d", JNI::getAndroidSDKVersionId());
 }
 
 OSystem_Android::~OSystem_Android() {
@@ -352,6 +355,13 @@ void OSystem_Android::initBackend() {
 	ConfMan.registerDefault("aspect_ratio", true);
 	ConfMan.registerDefault("filtering", false);
 	ConfMan.registerDefault("autosave_period", 0);
+
+	int androidDeviceSDKLevel = JNI::getAndroidSDKVersionId();
+	// Store the SDK version ID of the device to make it available to ScummVM C++ code
+	// so that we can make decisions based on running SDK (eg. use Android's folder picker or ScummVM's)
+	// NOTE: This value will be 0 if we failed to retrieve the SDK version
+	ConfMan.registerDefault("android_sdk", androidDeviceSDKLevel);
+	LOGD("Android SDK in Confman (Default): %d", ConfMan.getInt("android_sdk"));
 
 	// explicitly set this, since fullscreen cannot be changed from GUI
 	// and for Android it should be persisted (and ConfMan.hasKey("fullscreen") check should return true for it)

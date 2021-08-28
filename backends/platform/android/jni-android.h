@@ -70,6 +70,7 @@ public:
 	static void showKeyboardControl(bool enable);
 	static void showSAFRevokePermsControl(bool enable);
 	static void addSysArchivesToSearchSet(Common::SearchSet &s, int priority);
+	static jint getAndroidSDKVersionId();
 
 	static inline bool haveSurface();
 	static inline bool swapBuffers();
