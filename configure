@@ -5819,6 +5819,10 @@ else
 		echo "asl"
 		_dialogs=yes
 		;;
+	android)
+		echo "android"
+		_dialogs=yes
+		;;
 	darwin*)
 		echo "osx"
 		_dialogs=yes

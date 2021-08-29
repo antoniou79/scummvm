@@ -93,6 +93,8 @@ jmethodID JNI::_MID_createDirectoryWithSAF = 0;
 jmethodID JNI::_MID_createFileWithSAF = 0;
 jmethodID JNI::_MID_closeFileWithSAF = 0;
 jmethodID JNI::_MID_isDirectoryWritableWithSAF = 0;
+jmethodID JNI::_MID_showAndroidFolderPickerForURI = 0;
+jmethodID JNI::_MID_showAndroidFilePickerForURI = 0;
 
 jmethodID JNI::_MID_EGL10_eglSwapBuffers = 0;
 
@@ -581,6 +583,8 @@ void JNI::create(JNIEnv *env, jobject self, jobject asset_manager,
 	FIND_METHOD(, createFileWithSAF, "(Ljava/lang/String;)Ljava/lang/String;");
 	FIND_METHOD(, closeFileWithSAF, "(Ljava/lang/String;)V");
 	FIND_METHOD(, isDirectoryWritableWithSAF, "(Ljava/lang/String;)Z");
+	FIND_METHOD(, showAndroidFolderPickerForURI, "(Ljava/lang/String;)Ljava/lang/String;");
+	FIND_METHOD(, showAndroidFilePickerForURI, "(Ljava/lang/String;)Ljava/lang/String;");
 #endif
 
 	_jobj_egl = env->NewGlobalRef(egl);
@@ -823,6 +827,58 @@ Common::Array<Common::String> JNI::getAllStorageLocations() {
 
 	return *res;
 }
+
+// TODO ASDF combine with showAndroidFilePickerForURI?
+Common::U32String JNI::showAndroidFolderPickerForURI(const Common::String &initPath) {
+#ifndef BACKEND_ANDROID3D
+	JNIEnv *env = JNI::getEnv();
+	jstring javaInitPath = env->NewStringUTF(initPath.c_str());
+
+	jstring selectedFolderURI_JSTR = (jstring)env->CallObjectMethod(_jobj, _MID_showAndroidFolderPickerForURI, javaInitPath);
+
+	if (env->ExceptionCheck()) {
+		LOGE("JNI - Failed to show Android Folder Picker");
+
+		env->ExceptionDescribe();
+		env->ExceptionClear();
+		selectedFolderURI_JSTR = env->NewStringUTF("");
+	}
+	Common::U32String selectedFolderURI_Str = convertFromJString(env, selectedFolderURI_JSTR);
+
+	env->DeleteLocalRef(selectedFolderURI_JSTR);
+
+	return selectedFolderURI_Str;
+#else
+	return Common::U32String();
+#endif
+}
+
+// TODO ASDF combine with showAndroidFolderPickerForURI?
+Common::U32String JNI::showAndroidFilePickerForURI(const Common::String &initPath) {
+#ifndef BACKEND_ANDROID3D
+	JNIEnv *env = JNI::getEnv();
+	jstring javaInitPath = env->NewStringUTF(initPath.c_str());
+
+	jstring selectedFileURI_JSTR = (jstring)env->CallObjectMethod(_jobj, _MID_showAndroidFilePickerForURI, javaInitPath);
+
+	if (env->ExceptionCheck()) {
+		LOGE("JNI - Failed to show Android File Picker");
+
+		env->ExceptionDescribe();
+		env->ExceptionClear();
+		selectedFileURI_JSTR = env->NewStringUTF("");
+	}
+
+	Common::U32String selectedFileURI_Str = convertFromJString(env, selectedFileURI_JSTR);
+
+	env->DeleteLocalRef(selectedFileURI_JSTR);
+
+	return selectedFileURI_Str;
+#else
+	return Common::U32String();
+#endif
+}
+
 
 bool JNI::createDirectoryWithSAF(const Common::String &dirPath) {
 #ifndef BACKEND_ANDROID3D

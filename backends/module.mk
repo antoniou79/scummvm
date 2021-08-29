@@ -226,7 +226,8 @@ endif
 
 ifeq ($(BACKEND),android)
 MODULE_OBJS += \
-	mutex/pthread/pthread-mutex.o
+	mutex/pthread/pthread-mutex.o \
+	dialogs/android/android-dialogs.o
 endif
 
 ifeq ($(BACKEND),android3d)

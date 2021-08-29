@@ -85,6 +85,11 @@ BrowserDialog::BrowserDialog(const Common::U32String &title, bool dirBrowser)
 
 int BrowserDialog::runModal() {
 #if defined(USE_SYSDIALOGS)
+	// TODO ASDF IMPORTANT!
+	// TODO Android does not have USE_SYSDIALOGS defined -> IT SHOULD -> This does not mean necessarily that we will use them
+	//      ASDF we will have to set  gui_browser_native in ConfMan kApplicationDomain too for it
+	// We check the running SDK version for the Android Device
+	// and decide if we will use the native folder picker
 	// Try to use the backend browser
 	Common::DialogManager *dialogManager = g_system->getDialogManager();
 	if (dialogManager) {

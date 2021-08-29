@@ -83,7 +83,8 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 	// SAF related
 	private LinkedHashMap<String, ParcelFileDescriptor> hackyNameToOpenFileDescriptorList;
 	public final static int REQUEST_SAF = 50000;
-	public final static int REQUEST_FOLDER_ACCESS = 50001;
+	public final static int SELECT_FOLDER = 50001;
+	public final static int SELECT_FILE = 50002;
 
 	/**
 	 * Ids to identify an external storage read (and write) request.
@@ -744,6 +745,60 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 			return new String[0]; // an array of zero length
 		}
 
+		protected String showAndroidFolderPickerForURI(String initPath) {
+			final String[] retResStr = {""};
+
+			// TODO ASDF convert initPath to URI if possible and pass it here
+			selectFolderWithNativeUI(null);
+			Log.d(ScummVM.LOG_TAG, "Requested Folder Selection with Native Browser!");
+
+			SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+
+			String folderURIStr = sharedPref.getString(getString(R.string.tempBrowserLastSelectedFolderURI), null);
+
+			if (!TextUtils.isEmpty(folderURIStr)) {
+				try {
+					Log.d(ScummVM.LOG_TAG, "retrieved tempSelectedFolderUri: " + folderURIStr);
+					retResStr[0] = folderURIStr;
+				} catch (Exception ignored) {
+				}
+			}
+
+			SharedPreferences.Editor editor = sharedPref.edit();
+			editor.remove(getString(R.string.tempBrowserLastSelectedFolderURI));
+			editor.apply();
+			// Do we need a call back?
+
+			return retResStr[0];
+		}
+
+		// TODO ASDF merge with showAndroidFolderPickerForURI?
+		protected String showAndroidFilePickerForURI(String initPath) {
+			final String[] retResStr = {""};
+
+			// TODO ASDF convert initPath to URI if possible and pass it here
+			selectFileWithNativeUI(null);
+			Log.d(ScummVM.LOG_TAG, "Requested File Selection with Native Browser!");
+
+			SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+			String fileURIStr = sharedPref.getString(getString(R.string.tempBrowserLastSelectedFileURI), null);
+
+			if (!TextUtils.isEmpty(fileURIStr)) {
+				try {
+					Log.d(ScummVM.LOG_TAG, "retrieved tempSelectedFileUri: " + fileURIStr);
+					retResStr[0] = fileURIStr;
+				} catch (Exception ignored) {
+				}
+			}
+
+			SharedPreferences.Editor editor = sharedPref.edit();
+			editor.remove(getString(R.string.tempBrowserLastSelectedFileURI));
+			editor.apply();
+			// Do we need a call back?
+
+			return retResStr[0];
+		}
+
 		// In this method we first try the old method for creating directories (mkdirs())
 		// That should work with app spaces but will probably have issues with external physical "secondary" storage locations
 		// (eg user SD Card) on some devices, anyway.
@@ -784,6 +839,8 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 					Log.d(ScummVM.LOG_TAG, "Already requested Storage Access (Storage Access Framework) in the past (share prefs saved)!");
 				}
 
+				// TODO ASDF if we requested SAF access via requestStorageAccessFramework,
+				//      that intent is non-blocking and this code will be executed BEFORE user granted access
 				if (canWriteFile(folderToCreate, true)) {
 					// TODO we should only need the callback if we want to do something with the file descriptor
 					//  (the writeFile will close it afterwards if keepFileDescriptorOpen is false)
@@ -835,6 +892,8 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 				}
 			}
 
+			// TODO ASDF if we requested SAF access via requestStorageAccessFramework,
+			//      that intent is non-blocking and this code will be executed BEFORE user granted access
 			if (canWriteFile(folderToCheck, true)) {
 				Log.d(ScummVM.LOG_TAG, "(post SAF request) Writing is possible for this directory node");
 				retRes[0] = true;
@@ -874,6 +933,8 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 					Log.d(ScummVM.LOG_TAG, "Requested Storage Access via Storage Access Framework!");
 				}
 
+				// TODO ASDF if we requested SAF access via requestStorageAccessFramework,
+				//      that intent is non-blocking and this code will be executed BEFORE user granted access
 				if (canWriteFile(fileToCreate, false)) {
 					// TODO we should only need the callback if we want to do something with the file descriptor
 					//      (the writeFile will close it afterwards if keepFileDescriptorOpen is false)
@@ -2222,7 +2283,7 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 					}
 					return;
 				}
-			} else if (requestCode == REQUEST_FOLDER_ACCESS) {
+			} else if (requestCode == SELECT_FOLDER) {
 				// The result data contains a URI for the document or directory that
 				// the user selected.
 				Uri selectedFolderUri = null;
@@ -2245,6 +2306,40 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 					//           SAF key(s) can be revoked
 					//           Folders can be erased
 					Log.d(ScummVM.LOG_TAG, "Selected Folder URI: " + selectedFolderUri.toString());
+					// Use SharedPreferences (temp key) to communicate the result URI to ScummVM calling method (and eventually back to native code via JNI)
+					SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+
+					SharedPreferences.Editor editor = sharedPref.edit();
+					editor.putString(getString(R.string.tempBrowserLastSelectedFolderURI), selectedFolderUri.toString());
+					editor.apply();
+				} else {
+					Log.d(ScummVM.LOG_TAG, "Warning: NO selected Folder URI!");
+				}
+				return;
+			} else if (requestCode == SELECT_FILE) {
+				// TODO
+				// Each document is represented as a content:// URI backed by a DocumentsProvider,
+				// which can be opened as a stream with ContentResolver#openFileDescriptor(Uri, String), or queried for DocumentsContract.Document metadata.
+				// https://developer.android.com/reference/android/content/Intent#ACTION_OPEN_DOCUMENT
+				// All selected documents are returned to the calling application with persistable read and write permission grants.
+				// TODO !!! If you want to maintain access to the documents across device reboots,
+				//          you need to explicitly take the persistable permissions using ContentResolver#takePersistableUriPermission(Uri, int).
+				// TODO ??? Callers must indicate the acceptable document MIME types through setType(java.lang.String). For example, to select photos, use image/*. If multiple disjoint MIME types are acceptable, define them in EXTRA_MIME_TYPES and setType(java.lang.String) to */*.
+				// TODO !!! Callers must include CATEGORY_OPENABLE in the Intent to obtain URIs that can be opened with ContentResolver#openFileDescriptor(Uri, String).
+				// Output: The URI of the item that was picked, returned in getData(). This must be a content:// URI so that any receiver can access it.
+				// If multiple documents were selected, they are returned in getClipData().
+				Uri selectedFileUri = null;
+				if (resultData != null && resultData.getData() != null) {
+					selectedFileUri = resultData.getData();
+					Log.d(ScummVM.LOG_TAG, "Selected File URI: " + selectedFileUri.toString());
+					// Use SharedPreferences (temp key) to communicate the result URI to ScummVM calling method (and eventually back to native code via JNI)
+					SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+
+					SharedPreferences.Editor editor = sharedPref.edit();
+					editor.putString(getString(R.string.tempBrowserLastSelectedFileURI), selectedFileUri.toString());
+					editor.apply();
+				} else {
+					Log.d(ScummVM.LOG_TAG, "Warning: NO selected File URI!");
 				}
 				return;
 			}
@@ -2307,16 +2402,35 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 	//           and also (ASDF) uses the sound code which did not work for certain versions of Android vs others
 	// TODO ASDF -- Unrelated but look more into PK's code for native sound driver
 	// TODO ASDF -- Unrelated but look more into PK's code for isolating Android code more.
-	public void selectDirectoryWithNativeUI(Uri uriToLoad) {
-		// Choose a directory using the system's file picker.
-		Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+	public void selectFolderWithNativeUI(Uri uriToLoad) {
+		// Choose a directory using the system's folder picker.
+		if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+			Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
 
+			// Optionally, specify a URI for the directory that should be opened in
+			// the system folder picker when it loads.
+			// TODO ??? ASDF add extra for the specific type of path we are selecting here (eg savepath, extraspath) and domain (specific game id or scummvm)
+			intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uriToLoad);
+
+			startActivityForResult(intent, SELECT_FOLDER);
+		}
+	}
+
+	public void selectFileWithNativeUI(Uri uriToLoad) {
+		// Choose a directory using the system's file picker.
+		// https://developer.android.com/reference/android/content/Intent#ACTION_OPEN_DOCUMENT
+		// From API 19 and above
+		Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+		intent.addCategory(Intent.CATEGORY_OPENABLE);
+		intent.setType("*/*");
 		// Optionally, specify a URI for the directory that should be opened in
 		// the system file picker when it loads.
-		// TODO ASDF add extra for the specific type of path we are selecting here (eg savepath, extraspath) and domain (specific game id or scummvm)
+		// INFO: Callers can set a document URI through DocumentsContract#EXTRA_INITIAL_URI to indicate the initial location of documents navigator.
+		//       System will do its best to launch the navigator in the specified document if it's a folder,
+		//       or the folder that contains the specified document if not.
 		intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uriToLoad);
 
-		startActivityForResult(intent, REQUEST_FOLDER_ACCESS);
+		startActivityForResult(intent, SELECT_FILE);
 	}
 
 	// A method to revoke SAF granted stored permissions

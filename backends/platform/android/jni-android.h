@@ -90,6 +90,8 @@ public:
 	static Common::U32String createFileWithSAF(const Common::String &filePath);
 	static void closeFileWithSAF(const Common::String &hackyFilename);
 	static bool isDirectoryWritableWithSAF(const Common::String &dirPath);
+	static Common::U32String showAndroidFolderPickerForURI(const Common::String &initPath);
+    static Common::U32String showAndroidFilePickerForURI(const Common::String &initPath);
 
 private:
 	static JavaVM *_vm;
@@ -124,6 +126,8 @@ private:
 	static jmethodID _MID_createFileWithSAF;
 	static jmethodID _MID_closeFileWithSAF;
 	static jmethodID _MID_isDirectoryWritableWithSAF;
+	static jmethodID _MID_showAndroidFolderPickerForURI;
+	static jmethodID _MID_showAndroidFilePickerForURI;
 
 	static jmethodID _MID_EGL10_eglSwapBuffers;
 

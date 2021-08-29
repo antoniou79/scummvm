@@ -69,6 +69,8 @@
 #include "backends/platform/android/android.h"
 #include "backends/platform/android/graphics.h"
 
+#include "backends/dialogs/android/android-dialogs.h"
+
 const char *android_log_tag = "ScummVM";
 
 // This replaces the bionic libc assert functions with something that
@@ -113,6 +115,11 @@ OSystem_Android::OSystem_Android(int audio_sample_rate, int audio_buffer_size) :
 
 	_fsFactory = new POSIXFilesystemFactory();
 
+#if defined(USE_SYSDIALOGS)
+	// Initialize dialog manager for folder selection
+	_dialogManager = new AndroidDialogManager();
+#endif
+
 	LOGI("Running on: [%s] [%s] [%s] [%s] [%s] SDK:%s ABI:%s",
 			getSystemProperty("ro.product.manufacturer").c_str(),
 			getSystemProperty("ro.product.model").c_str(),
@@ -123,6 +130,7 @@ OSystem_Android::OSystem_Android(int audio_sample_rate, int audio_buffer_size) :
 			getSystemProperty("ro.product.cpu.abi").c_str());
 	// JNI::getAndroidSDKVersionId() should be identical to the result from ("ro.build.version.sdk"),
 	// though getting it via JNI is maybe the most reliable option (?)
+	// Also __system_property_get which is used by getSystemProperty() is being deprecated in recent NDKs
 	LOGI("SDK Version: %d", JNI::getAndroidSDKVersionId());
 }
 
@@ -363,6 +371,30 @@ void OSystem_Android::initBackend() {
 	ConfMan.registerDefault("android_sdk", androidDeviceSDKLevel);
 	LOGD("Android SDK in Confman (Default): %d", ConfMan.getInt("android_sdk"));
 
+	// SDK API level 29 => Android 10
+	// TODO ASDF check if the old browser is still launched
+	// - use dummy debug value for androidDeviceSDKLevel)
+	// - use old Android device
+	if (androidDeviceSDKLevel >= 29) {
+		// TODO do we need the native folder picker for lower SDK API levels too?
+		// Not interested in existing value of gui_browser_native.
+		// We just set it at every launch
+		// In the code we check it for the Common::ConfigManager::kApplicationDomain so we don't use registerDefault
+		// even though we don't really want persistence across ScummVM sessions
+		// INFO: https://developer.android.com/training/data-storage/shared/documents-files
+		// The ACTION_OPEN_DOCUMENT_TREE intent action, available on Android 5.0 (API level 21) and higher,
+		// allows users to select a specific directory, granting your app access to all of the files and sub-directories within that directory.
+		// ---
+		// Open a document or file
+        // The ACTION_OPEN_DOCUMENT intent action allows users to select a specific document or file to open.
+		// TODO Maybe use it from 21 and above?
+		// TODO ASDF How do we handle internal paths?
+		// TODO ASDF How do we handle old external paths after upgrade to this new version?
+		ConfMan.setBool("gui_browser_native", true, Common::ConfigManager::kApplicationDomain);
+	} else {
+		ConfMan.setBool("gui_browser_native", false, Common::ConfigManager::kApplicationDomain);
+	}
+
 	// explicitly set this, since fullscreen cannot be changed from GUI
 	// and for Android it should be persisted (and ConfMan.hasKey("fullscreen") check should return true for it)
 	// Also in Options::dialogBuild() (gui/options.cpp), since Android does not have kFeatureFullscreenMode (see hasFeature() below)
@@ -473,6 +505,14 @@ bool OSystem_Android::hasFeature(Feature f) {
 			f == kFeatureClipboardSupport) {
 		return true;
 	}
+#ifdef USE_SYSDIALOGS
+	// TODO setting this to true currently only results in a checkbox being displayed in Options
+	//      to choose whether to use the native interface or not
+	//      We could enable this checkbox for debug, but ideally we want the config manager key to be set
+	//      automatically, since in newer Android OS, the ScummVM browser won't work and may lead to issues (for external memory access)
+	if (f == kFeatureSystemBrowserDialog)
+		return true;
+#endif
 	return ModularGraphicsBackend::hasFeature(f);
 }
 
