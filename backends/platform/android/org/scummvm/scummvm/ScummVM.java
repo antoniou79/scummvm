@@ -37,8 +37,6 @@ public abstract class ScummVM implements SurfaceHolder.Callback, Runnable {
 	private int _sample_rate = 0;
 	private int _buffer_size = 0;
 
-	public boolean startedNonBlockignFilePicker = false;
-
 	private String[] _args;
 
 	private native void create(AssetManager asset_manager,

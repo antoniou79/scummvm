@@ -79,6 +79,7 @@ Common::DialogManager::DialogResult AndroidDialogManager::showFileBrowser(const 
 		return kDialogCancel;
 	}
 
+	// TODO ASDF unused?
 	char pathBuffer[MAXPATHLEN];
 
 	LOGD("AndroidDialogManager::showFileBrowser()");

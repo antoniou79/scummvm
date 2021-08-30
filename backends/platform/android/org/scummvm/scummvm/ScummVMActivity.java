@@ -2258,17 +2258,11 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 	// https://stackoverflow.com/questions/59000390/android-accessing-files-in-native-c-c-code-with-google-scoped-storage-api
 	// -------------------------------------------------------------------------------------------
 	public void onActivityResult(int requestCode, int resultCode, Intent resultData) {
-		if (resultCode != RESULT_OK) {
-			Log.d(ScummVM.LOG_TAG, "Warning: resultCode NOT OK!");
-			// TODO check a flag variable to see if we need to call the callbackForJavaPickerDlgReturned()
-			//      to release the native code (AndroidDialogManager) from loop-waiting on the dialog return?
-			if (_scummvm.startedNonBlockignFilePicker) {
-				_scummvm.callbackForJavaPickerDlgReturned("", 0);
-				_scummvm.startedNonBlockignFilePicker = false;
-			}
-			return;
-		} else {
-			if (requestCode == REQUEST_SAF) {
+		if (requestCode == REQUEST_SAF) {
+			if (resultCode != RESULT_OK) {
+				// TODO ASDF (user skipped the dialogue for selecting folder as root for SAF permission)
+				return;
+			} else {
 				if (resultData != null && resultData.getData() != null) {
 					Uri treeUri = resultData.getData();
 					//SharedPreferences sharedPref = getApplicationContext().getSharedPreferences(getApplicationContext().getPackageName() + "_preferences", Context.MODE_PRIVATE);
@@ -2287,7 +2281,15 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 					}
 					return;
 				}
-			} else if (requestCode == SELECT_FOLDER) {
+			}
+		} else if (requestCode == SELECT_FOLDER) {
+			if (resultCode != RESULT_OK) {
+				Log.d(ScummVM.LOG_TAG, "Warning: resultCode NOT OK for FOLDER selection!");
+				// TODO check a flag variable to see if we need to call the callbackForJavaPickerDlgReturned()
+				//      to release the native code (AndroidDialogManager) from loop-waiting on the dialog return?
+				_scummvm.callbackForJavaPickerDlgReturned("", 0);
+				return;
+			} else {
 				// The result data contains a URI for the document or directory that
 				// the user selected.
 				Uri selectedFolderUri = null;
@@ -2320,8 +2322,15 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 					Log.d(ScummVM.LOG_TAG, "Warning: NO selected Folder URI!");
 				}
 				return;
-			} else if (requestCode == SELECT_FILE) {
-				// TODO
+			}
+		} else if (requestCode == SELECT_FILE) {
+			if (resultCode != RESULT_OK) {
+				Log.d(ScummVM.LOG_TAG, "Warning: resultCode NOT OK for FILE selection!");
+				// TODO check a flag variable to see if we need to call the callbackForJavaPickerDlgReturned()
+				//      to release the native code (AndroidDialogManager) from loop-waiting on the dialog return?
+				_scummvm.callbackForJavaPickerDlgReturned("", 0);
+				return;
+			} else {
 				// Each document is represented as a content:// URI backed by a DocumentsProvider,
 				// which can be opened as a stream with ContentResolver#openFileDescriptor(Uri, String), or queried for DocumentsContract.Document metadata.
 				// https://developer.android.com/reference/android/content/Intent#ACTION_OPEN_DOCUMENT
@@ -2407,7 +2416,6 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 	// TODO ASDF -- Unrelated but look more into PK's code for native sound driver
 	// TODO ASDF -- Unrelated but look more into PK's code for isolating Android code more.
 	public void selectFolderWithNativeUI(Uri uriToLoad) {
-		_scummvm.startedNonBlockignFilePicker = false;
 		// Choose a directory using the system's folder picker.
 		if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
 			Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
@@ -2416,13 +2424,11 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 			// the system folder picker when it loads.
 			// TODO ??? ASDF add extra for the specific type of path we are selecting here (eg savepath, extraspath) and domain (specific game id or scummvm)
 			intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uriToLoad);
-			_scummvm.startedNonBlockignFilePicker = true;
 			startActivityForResult(intent, SELECT_FOLDER);
 		}
 	}
 
 	public void selectFileWithNativeUI(Uri uriToLoad) {
-		_scummvm.startedNonBlockignFilePicker = false;
 		// Choose a directory using the system's file picker.
 		// https://developer.android.com/reference/android/content/Intent#ACTION_OPEN_DOCUMENT
 		// From API 19 and above
@@ -2435,7 +2441,6 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 		//       System will do its best to launch the navigator in the specified document if it's a folder,
 		//       or the folder that contains the specified document if not.
 		intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uriToLoad);
-		_scummvm.startedNonBlockignFilePicker = true;
 		startActivityForResult(intent, SELECT_FILE);
 	}
 
