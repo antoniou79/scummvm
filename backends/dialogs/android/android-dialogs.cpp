@@ -98,6 +98,7 @@ Common::DialogManager::DialogResult AndroidDialogManager::showFileBrowser(const 
 	// Since the (java side) Android file and folder pickers are non-blocking (startActivityForResult())
 	// We need a waiting loop here, the "callback" in the
 	while (_waitForJavaPickerToReturn) {
+		// TODO is there a need here for processEvents() or updateScreen()?
 		// processEvents();
 		// updateScreen();
 		g_system->delayMillis(10);
