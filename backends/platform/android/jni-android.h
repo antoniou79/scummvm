@@ -90,8 +90,8 @@ public:
 	static Common::U32String createFileWithSAF(const Common::String &filePath);
 	static void closeFileWithSAF(const Common::String &hackyFilename);
 	static bool isDirectoryWritableWithSAF(const Common::String &dirPath);
-	static Common::U32String showAndroidFolderPickerForURI(const Common::String &initPath);
-    static Common::U32String showAndroidFilePickerForURI(const Common::String &initPath);
+	static void showAndroidFolderPickerForURI(const Common::String &initPath);
+    static void showAndroidFilePickerForURI(const Common::String &initPath);
 
 private:
 	static JavaVM *_vm;
@@ -155,6 +155,8 @@ private:
 	static void pushEvent(JNIEnv *env, jobject self, int type, int arg1,
 							int arg2, int arg3, int arg4, int arg5, int arg6);
 	static void setPause(JNIEnv *env, jobject self, jboolean value);
+
+	static void callbackForJavaPickerDlgReturned(JNIEnv *env, jobject self, jstring selUri, jint status);
 
 	static jstring getNativeVersionInfo(JNIEnv *env, jobject self);
 	static jstring convertToJString(JNIEnv *env, const Common::U32String &str);

@@ -37,6 +37,8 @@ public abstract class ScummVM implements SurfaceHolder.Callback, Runnable {
 	private int _sample_rate = 0;
 	private int _buffer_size = 0;
 
+	public boolean startedNonBlockignFilePicker = false;
+
 	private String[] _args;
 
 	private native void create(AssetManager asset_manager,
@@ -57,6 +59,8 @@ public abstract class ScummVM implements SurfaceHolder.Callback, Runnable {
 
 	final public native String getNativeVersionInfo();
 
+	final public native void callbackForJavaPickerDlgReturned(String uriSelected, int status);
+
 	// Callbacks from C++ peer instance
 	abstract protected void getDPI(float[] values);
 	abstract protected void displayMessageOnOSD(String msg);
@@ -76,8 +80,8 @@ public abstract class ScummVM implements SurfaceHolder.Callback, Runnable {
 	abstract protected String createFileWithSAF(String filePath);
 	abstract protected void closeFileWithSAF(String hackyFilename);
 	abstract protected boolean isDirectoryWritableWithSAF(String dirPath);
-	abstract protected String showAndroidFolderPickerForURI(String initPath);
-	abstract protected String showAndroidFilePickerForURI(String initPath);
+	abstract protected void showAndroidFolderPickerForURI(String initPath);
+	abstract protected void showAndroidFilePickerForURI(String initPath);
 
 	public ScummVM(AssetManager asset_manager, SurfaceHolder holder, final MyScummVMDestroyedCallback scummVMDestroyedCallback) {
 		_asset_manager = asset_manager;

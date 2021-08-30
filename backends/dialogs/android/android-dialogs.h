@@ -30,7 +30,19 @@
 
 class AndroidDialogManager : public Common::DialogManager {
 public:
+	AndroidDialogManager();
+
+	void callbackForJavaPickerDlgReturned(Common::U32String uriSelected, int retCode);
+
 	virtual DialogResult showFileBrowser(const Common::U32String &title, Common::FSNode &choice, bool isDirBrowser);
+
+private:
+	bool _waitForJavaPickerToReturn;
+	int _retCode;
+	Common::U32String _uriSelected;
+
+	void reset();
+
 };
 
 #endif

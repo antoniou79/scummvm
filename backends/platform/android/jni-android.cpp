@@ -123,7 +123,9 @@ const JNINativeMethod JNI::_natives[] = {
 	{ "setPause", "(Z)V",
 		(void *)JNI::setPause },
 	{ "getNativeVersionInfo", "()Ljava/lang/String;",
-		(void *)JNI::getNativeVersionInfo }
+		(void *)JNI::getNativeVersionInfo },
+	{ "callbackForJavaPickerDlgReturned", "(Ljava/lang/String;I)V",
+		(void *)JNI::callbackForJavaPickerDlgReturned }
 };
 
 JNI::JNI() {
@@ -583,8 +585,8 @@ void JNI::create(JNIEnv *env, jobject self, jobject asset_manager,
 	FIND_METHOD(, createFileWithSAF, "(Ljava/lang/String;)Ljava/lang/String;");
 	FIND_METHOD(, closeFileWithSAF, "(Ljava/lang/String;)V");
 	FIND_METHOD(, isDirectoryWritableWithSAF, "(Ljava/lang/String;)Z");
-	FIND_METHOD(, showAndroidFolderPickerForURI, "(Ljava/lang/String;)Ljava/lang/String;");
-	FIND_METHOD(, showAndroidFilePickerForURI, "(Ljava/lang/String;)Ljava/lang/String;");
+	FIND_METHOD(, showAndroidFolderPickerForURI, "(Ljava/lang/String;)V");
+	FIND_METHOD(, showAndroidFilePickerForURI, "(Ljava/lang/String;)V");
 #endif
 
 	_jobj_egl = env->NewGlobalRef(egl);
@@ -746,11 +748,18 @@ void JNI::setPause(JNIEnv *env, jobject self, jboolean value) {
 	}
 }
 
+void JNI::callbackForJavaPickerDlgReturned(JNIEnv *env, jobject self, jstring selUri, jint status) {
+	// TODO
+#if defined(USE_SYSDIALOGS)
+	// Initialize dialog manager for folder selection
+	//_system->getAndroidDialogManager()->callbackForJavaPickerDlgReturned(Common::U32String(""), (int)status);
+	_system->getAndroidDialogManager()->callbackForJavaPickerDlgReturned(convertFromJString(env, selUri), (int)status);
+#endif
+}
 
 jstring JNI::getNativeVersionInfo(JNIEnv *env, jobject self) {
 	return convertToJString(env, Common::U32String(gScummVMVersion));
 }
-
 
 jint JNI::getAndroidSDKVersionId() {
 	// based on: https://stackoverflow.com/a/10511880
@@ -829,53 +838,41 @@ Common::Array<Common::String> JNI::getAllStorageLocations() {
 }
 
 // TODO ASDF combine with showAndroidFilePickerForURI?
-Common::U32String JNI::showAndroidFolderPickerForURI(const Common::String &initPath) {
+void JNI::showAndroidFolderPickerForURI(const Common::String &initPath) {
 #ifndef BACKEND_ANDROID3D
 	JNIEnv *env = JNI::getEnv();
 	jstring javaInitPath = env->NewStringUTF(initPath.c_str());
 
-	jstring selectedFolderURI_JSTR = (jstring)env->CallObjectMethod(_jobj, _MID_showAndroidFolderPickerForURI, javaInitPath);
+	env->CallObjectMethod(_jobj, _MID_showAndroidFolderPickerForURI, javaInitPath);
 
 	if (env->ExceptionCheck()) {
 		LOGE("JNI - Failed to show Android Folder Picker");
 
 		env->ExceptionDescribe();
 		env->ExceptionClear();
-		selectedFolderURI_JSTR = env->NewStringUTF("");
+		// TODO ASDF Callback with error status?
+		JNI::callbackForJavaPickerDlgReturned(env, _jobj, env->NewStringUTF(""), -1);
 	}
-	Common::U32String selectedFolderURI_Str = convertFromJString(env, selectedFolderURI_JSTR);
-
-	env->DeleteLocalRef(selectedFolderURI_JSTR);
-
-	return selectedFolderURI_Str;
-#else
-	return Common::U32String();
 #endif
 }
 
 // TODO ASDF combine with showAndroidFolderPickerForURI?
-Common::U32String JNI::showAndroidFilePickerForURI(const Common::String &initPath) {
+void JNI::showAndroidFilePickerForURI(const Common::String &initPath) {
 #ifndef BACKEND_ANDROID3D
 	JNIEnv *env = JNI::getEnv();
 	jstring javaInitPath = env->NewStringUTF(initPath.c_str());
 
-	jstring selectedFileURI_JSTR = (jstring)env->CallObjectMethod(_jobj, _MID_showAndroidFilePickerForURI, javaInitPath);
+	env->CallObjectMethod(_jobj, _MID_showAndroidFilePickerForURI, javaInitPath);
 
 	if (env->ExceptionCheck()) {
 		LOGE("JNI - Failed to show Android File Picker");
 
 		env->ExceptionDescribe();
 		env->ExceptionClear();
-		selectedFileURI_JSTR = env->NewStringUTF("");
+		// TODO ASDF Callback with error status?
+		JNI::callbackForJavaPickerDlgReturned(env, _jobj, env->NewStringUTF(""), -1);
+
 	}
-
-	Common::U32String selectedFileURI_Str = convertFromJString(env, selectedFileURI_JSTR);
-
-	env->DeleteLocalRef(selectedFileURI_JSTR);
-
-	return selectedFileURI_Str;
-#else
-	return Common::U32String();
 #endif
 }
 

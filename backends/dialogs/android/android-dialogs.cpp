@@ -56,8 +56,28 @@
 
 #include "common/config-manager.h"
 
+AndroidDialogManager::AndroidDialogManager() : DialogManager() {
+	reset();
+}
+
+void AndroidDialogManager::callbackForJavaPickerDlgReturned(Common::U32String uriSelected, int retCode) {
+	 _waitForJavaPickerToReturn = false;
+	 _uriSelected = uriSelected;
+	 _retCode = retCode;
+}
+
+void AndroidDialogManager::reset() {
+	 _waitForJavaPickerToReturn = false;
+	_uriSelected = "";
+	_retCode = -1;
+}
+
 Common::DialogManager::DialogResult AndroidDialogManager::showFileBrowser(const Common::U32String &title, Common::FSNode &choice, bool isDirBrowser) {
 	DialogResult result = kDialogCancel;
+	if (_waitForJavaPickerToReturn) {
+		// This should never happen (probably)
+		return kDialogCancel;
+	}
 
 	char pathBuffer[MAXPATHLEN];
 
@@ -68,13 +88,22 @@ Common::DialogManager::DialogResult AndroidDialogManager::showFileBrowser(const 
 	// ConfMan.hasKey("browser_lastpath"))  // ConfMan.get("browser_lastpath").c_str()
 
 	// TODO JNI call
-	Common::U32String uriSelected;
+	_waitForJavaPickerToReturn = true;
 	if (isDirBrowser) {
-		uriSelected = JNI::showAndroidFolderPickerForURI("");
+		JNI::showAndroidFolderPickerForURI("");
 	} else {
-		uriSelected= JNI::showAndroidFilePickerForURI("");
+		JNI::showAndroidFilePickerForURI("");
 	}
-	LOGD("AndroidDialogManager::showFileBrowser() - SELECTED URI: %s", uriSelected);
+	// Since the (java side) Android file and folder pickers are non-blocking (startActivityForResult())
+	// We need a waiting loop here, the "callback" in the
+	while (_waitForJavaPickerToReturn) {
+		// processEvents();
+		// updateScreen();
+		g_system->delayMillis(10);
+	}
+
+	LOGD("AndroidDialogManager::showFileBrowser() - return status: %d", _retCode);
+	//LOGD("AndroidDialogManager::showFileBrowser() - SELECTED URI: %S", _uriSelected.c_str());
 	// TODO update last browser path
 	// TODO how do we set the choice as FSNode??
 	// TODO if isDirBrowser false (selection of file, eg. SoundFont) then use JNI call for intent ACTION_OPEN_DOCUMENT
@@ -85,6 +114,19 @@ Common::DialogManager::DialogResult AndroidDialogManager::showFileBrowser(const 
     // NEED TO CALL ScummVMActivity.java: selectFileWithNativeUI(Uri uriToLoad) for file pick
 	//              AND get the result URI as a sting to use it SOMEHOW for FSNode!
 	// TODO HOW DO WE WAIT FOR onActivityResult and how do we get the resulting URI?
+	switch (_retCode) {
+	case 0:
+		result = kDialogCancel;
+		break;
+	case 1:
+		result = kDialogOk;
+		break;
+	default:
+		result = kDialogError;
+	}
+
+	g_system->getEventManager()->getEventDispatcher()->clearEvents();
+	reset();
 	return result;
 }
 

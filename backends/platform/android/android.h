@@ -34,6 +34,7 @@
 #include "backends/modular-backend.h"
 #include "backends/plugins/posix/posix-provider.h"
 #include "backends/fs/posix/posix-fs-factory.h"
+#include "backends/dialogs/android/android-dialogs.h"
 
 #include <pthread.h>
 
@@ -94,6 +95,9 @@ public:
 
 public:
 	void pushEvent(int type, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6);
+#if defined(USE_SYSDIALOGS)
+	AndroidDialogManager *getAndroidDialogManager() { return (AndroidDialogManager *)_dialogManager; }
+#endif
 
 private:
 	Common::Queue<Common::Event> _event_queue;

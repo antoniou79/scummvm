@@ -69,8 +69,6 @@
 #include "backends/platform/android/android.h"
 #include "backends/platform/android/graphics.h"
 
-#include "backends/dialogs/android/android-dialogs.h"
-
 const char *android_log_tag = "ScummVM";
 
 // This replaces the bionic libc assert functions with something that

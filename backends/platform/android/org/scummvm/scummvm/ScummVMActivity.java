@@ -745,58 +745,55 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 			return new String[0]; // an array of zero length
 		}
 
-		protected String showAndroidFolderPickerForURI(String initPath) {
+		protected void showAndroidFolderPickerForURI(String initPath) {
 			final String[] retResStr = {""};
 
 			// TODO ASDF convert initPath to URI if possible and pass it here
 			selectFolderWithNativeUI(null);
 			Log.d(ScummVM.LOG_TAG, "Requested Folder Selection with Native Browser!");
 
-			SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
-
-			String folderURIStr = sharedPref.getString(getString(R.string.tempBrowserLastSelectedFolderURI), null);
-
-			if (!TextUtils.isEmpty(folderURIStr)) {
-				try {
-					Log.d(ScummVM.LOG_TAG, "retrieved tempSelectedFolderUri: " + folderURIStr);
-					retResStr[0] = folderURIStr;
-				} catch (Exception ignored) {
-				}
-			}
-
-			SharedPreferences.Editor editor = sharedPref.edit();
-			editor.remove(getString(R.string.tempBrowserLastSelectedFolderURI));
-			editor.apply();
-			// Do we need a call back?
-
-			return retResStr[0];
+//			SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+//
+//			String folderURIStr = sharedPref.getString(getString(R.string.tempBrowserLastSelectedFolderURI), null);
+//
+//			if (!TextUtils.isEmpty(folderURIStr)) {
+//				try {
+//					Log.d(ScummVM.LOG_TAG, "retrieved tempSelectedFolderUri: " + folderURIStr);
+//					retResStr[0] = folderURIStr;
+//				} catch (Exception ignored) {
+//				}
+//			}
+//
+//			SharedPreferences.Editor editor = sharedPref.edit();
+//			editor.remove(getString(R.string.tempBrowserLastSelectedFolderURI));
+//			editor.apply();
 		}
 
 		// TODO ASDF merge with showAndroidFolderPickerForURI?
-		protected String showAndroidFilePickerForURI(String initPath) {
+		protected void showAndroidFilePickerForURI(String initPath) {
 			final String[] retResStr = {""};
 
 			// TODO ASDF convert initPath to URI if possible and pass it here
 			selectFileWithNativeUI(null);
 			Log.d(ScummVM.LOG_TAG, "Requested File Selection with Native Browser!");
 
-			SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
-			String fileURIStr = sharedPref.getString(getString(R.string.tempBrowserLastSelectedFileURI), null);
-
-			if (!TextUtils.isEmpty(fileURIStr)) {
-				try {
-					Log.d(ScummVM.LOG_TAG, "retrieved tempSelectedFileUri: " + fileURIStr);
-					retResStr[0] = fileURIStr;
-				} catch (Exception ignored) {
-				}
-			}
-
-			SharedPreferences.Editor editor = sharedPref.edit();
-			editor.remove(getString(R.string.tempBrowserLastSelectedFileURI));
-			editor.apply();
-			// Do we need a call back?
-
-			return retResStr[0];
+//			SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+//			String fileURIStr = sharedPref.getString(getString(R.string.tempBrowserLastSelectedFileURI), null);
+//
+//			if (!TextUtils.isEmpty(fileURIStr)) {
+//				try {
+//					Log.d(ScummVM.LOG_TAG, "retrieved tempSelectedFileUri: " + fileURIStr);
+//					retResStr[0] = fileURIStr;
+//				} catch (Exception ignored) {
+//				}
+//			}
+//
+//			SharedPreferences.Editor editor = sharedPref.edit();
+//			editor.remove(getString(R.string.tempBrowserLastSelectedFileURI));
+//			editor.apply();
+//			// Do we need a call back?
+//
+//			return retResStr[0];
 		}
 
 		// In this method we first try the old method for creating directories (mkdirs())
@@ -2261,9 +2258,16 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 	// https://stackoverflow.com/questions/59000390/android-accessing-files-in-native-c-c-code-with-google-scoped-storage-api
 	// -------------------------------------------------------------------------------------------
 	public void onActivityResult(int requestCode, int resultCode, Intent resultData) {
-		if (resultCode != RESULT_OK)
+		if (resultCode != RESULT_OK) {
+			Log.d(ScummVM.LOG_TAG, "Warning: resultCode NOT OK!");
+			// TODO check a flag variable to see if we need to call the callbackForJavaPickerDlgReturned()
+			//      to release the native code (AndroidDialogManager) from loop-waiting on the dialog return?
+			if (_scummvm.startedNonBlockignFilePicker) {
+				_scummvm.callbackForJavaPickerDlgReturned("", 0);
+				_scummvm.startedNonBlockignFilePicker = false;
+			}
 			return;
-		else {
+		} else {
 			if (requestCode == REQUEST_SAF) {
 				if (resultData != null && resultData.getData() != null) {
 					Uri treeUri = resultData.getData();
@@ -2306,12 +2310,12 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 					//           SAF key(s) can be revoked
 					//           Folders can be erased
 					Log.d(ScummVM.LOG_TAG, "Selected Folder URI: " + selectedFolderUri.toString());
-					// Use SharedPreferences (temp key) to communicate the result URI to ScummVM calling method (and eventually back to native code via JNI)
-					SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
-
-					SharedPreferences.Editor editor = sharedPref.edit();
-					editor.putString(getString(R.string.tempBrowserLastSelectedFolderURI), selectedFolderUri.toString());
-					editor.apply();
+					//// Use SharedPreferences (temp key) to communicate the result URI to ScummVM calling method (and eventually back to native code via JNI)
+					//SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+					//SharedPreferences.Editor editor = sharedPref.edit();
+					//editor.putString(getString(R.string.tempBrowserLastSelectedFolderURI), selectedFolderUri.toString());
+					//editor.apply();
+					_scummvm.callbackForJavaPickerDlgReturned(selectedFolderUri.toString(), 1);
 				} else {
 					Log.d(ScummVM.LOG_TAG, "Warning: NO selected Folder URI!");
 				}
@@ -2332,12 +2336,12 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 				if (resultData != null && resultData.getData() != null) {
 					selectedFileUri = resultData.getData();
 					Log.d(ScummVM.LOG_TAG, "Selected File URI: " + selectedFileUri.toString());
-					// Use SharedPreferences (temp key) to communicate the result URI to ScummVM calling method (and eventually back to native code via JNI)
-					SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
-
-					SharedPreferences.Editor editor = sharedPref.edit();
-					editor.putString(getString(R.string.tempBrowserLastSelectedFileURI), selectedFileUri.toString());
-					editor.apply();
+					//// Use SharedPreferences (temp key) to communicate the result URI to ScummVM calling method (and eventually back to native code via JNI)
+					//SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+					//SharedPreferences.Editor editor = sharedPref.edit();
+					//editor.putString(getString(R.string.tempBrowserLastSelectedFileURI), selectedFileUri.toString());
+					//editor.apply();
+					_scummvm.callbackForJavaPickerDlgReturned(selectedFileUri.toString(), 1);
 				} else {
 					Log.d(ScummVM.LOG_TAG, "Warning: NO selected File URI!");
 				}
@@ -2403,6 +2407,7 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 	// TODO ASDF -- Unrelated but look more into PK's code for native sound driver
 	// TODO ASDF -- Unrelated but look more into PK's code for isolating Android code more.
 	public void selectFolderWithNativeUI(Uri uriToLoad) {
+		_scummvm.startedNonBlockignFilePicker = false;
 		// Choose a directory using the system's folder picker.
 		if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
 			Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
@@ -2411,12 +2416,13 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 			// the system folder picker when it loads.
 			// TODO ??? ASDF add extra for the specific type of path we are selecting here (eg savepath, extraspath) and domain (specific game id or scummvm)
 			intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uriToLoad);
-
+			_scummvm.startedNonBlockignFilePicker = true;
 			startActivityForResult(intent, SELECT_FOLDER);
 		}
 	}
 
 	public void selectFileWithNativeUI(Uri uriToLoad) {
+		_scummvm.startedNonBlockignFilePicker = false;
 		// Choose a directory using the system's file picker.
 		// https://developer.android.com/reference/android/content/Intent#ACTION_OPEN_DOCUMENT
 		// From API 19 and above
@@ -2429,7 +2435,7 @@ public class ScummVMActivity extends Activity implements OnKeyboardVisibilityLis
 		//       System will do its best to launch the navigator in the specified document if it's a folder,
 		//       or the folder that contains the specified document if not.
 		intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uriToLoad);
-
+		_scummvm.startedNonBlockignFilePicker = true;
 		startActivityForResult(intent, SELECT_FILE);
 	}
 
