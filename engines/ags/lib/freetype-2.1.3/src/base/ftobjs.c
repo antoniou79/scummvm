@@ -1,0 +1,2505 @@
+/***************************************************************************/
+/*                                                                         */
+/*  ftobjs.c                                                               */
+/*                                                                         */
+/*    The FreeType private base classes (body).                            */
+/*                                                                         */
+/*  Copyright 1996-2001, 2002 by                                           */
+/*  David Turner, Robert Wilhelm, and Werner Lemberg.                      */
+/*                                                                         */
+/*  This file is part of the FreeType project, and may only be used,       */
+/*  modified, and distributed under the terms of the FreeType project      */
+/*  license, LICENSE.TXT.  By continuing to use, modify, or distribute     */
+/*  this file you indicate that you have read the license and              */
+/*  understand and accept it fully.                                        */
+/*                                                                         */
+/***************************************************************************/
+
+
+#include "engines/ags/lib/freetype-2.1.3/include/ft2build.h"
+#include FT2_1_3_LIST_H
+#include FT2_1_3_OUTLINE_H
+#include FT2_1_3_INTERNAL_OBJECTS_H
+#include FT2_1_3_INTERNAL_DEBUG_H
+#include FT2_1_3_INTERNAL_STREAM_H
+#include FT2_1_3_TRUETYPE_TABLES_H
+#include FT2_1_3_OUTLINE_H
+
+
+  FT2_1_3_BASE_DEF( void )
+  ft_validator_init( FT2_1_3_Validator        valid,
+                     const FT2_1_3_Byte*      base,
+                     const FT2_1_3_Byte*      limit,
+                     FT2_1_3_ValidationLevel  level )
+  {
+    valid->base  = base;
+    valid->limit = limit;
+    valid->level = level;
+    valid->error = 0;
+  }
+
+
+  FT2_1_3_BASE_DEF( FT2_1_3_Int )
+  ft_validator_run( FT2_1_3_Validator  valid )
+  {
+    int  result;
+
+
+    result = ft_setjmp( valid->jump_buffer );
+    return result;
+  }
+
+
+  FT2_1_3_BASE_DEF( void )
+  ft_validator_error( FT2_1_3_Validator  valid,
+                      FT2_1_3_Error      error )
+  {
+    valid->error = error;
+    ft_longjmp( valid->jump_buffer, 1 );
+  }
+
+
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /****                           S T R E A M                           ****/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+
+
+  /* create a new input stream from a FT2_1_3_Open_Args structure */
+  /*                                                         */
+  static FT2_1_3_Error
+  ft_input_stream_new( FT2_1_3_Library           library,
+                       const FT2_1_3_Open_Args*  args,
+                       FT2_1_3_Stream*           astream )
+  {
+    FT2_1_3_Error   error;
+    FT2_1_3_Memory  memory;
+    FT2_1_3_Stream  stream;
+
+
+    if ( !library )
+      return FT2_1_3_Err_Invalid_Library_Handle;
+
+    if ( !args )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    *astream = 0;
+    memory   = library->memory;
+
+    if ( FT2_1_3_NEW( stream ) )
+      goto Exit;
+
+    stream->memory = memory;
+
+    if ( args->flags & FT2_1_3_OPEN_MEMORY )
+    {
+      /* create a memory-based stream */
+      FT2_1_3_Stream_OpenMemory( stream,
+                            (const FT2_1_3_Byte*)args->memory_base,
+                            args->memory_size );
+    }
+    else if ( args->flags & FT2_1_3_OPEN_PATHNAME )
+    {
+      /* create a normal system stream */
+      error = FT2_1_3_Stream_Open( stream, args->pathname );
+      stream->pathname.pointer = args->pathname;
+    }
+    else if ( ( args->flags & FT2_1_3_OPEN_STREAM ) && args->stream )
+    {
+      /* use an existing, user-provided stream */
+
+      /* in this case, we do not need to allocate a new stream object */
+      /* since the caller is responsible for closing it himself       */
+      FT2_1_3_FREE( stream );
+      stream = args->stream;
+    }
+    else
+      error = FT2_1_3_Err_Invalid_Argument;
+
+    if ( error )
+      FT2_1_3_FREE( stream );
+    else
+      stream->memory = memory;  /* just to be certain */
+
+    *astream = stream;
+
+  Exit:
+    return error;
+  }
+
+
+  static void
+  ft_input_stream_free( FT2_1_3_Stream  stream,
+                        FT2_1_3_Int     external )
+  {
+    if ( stream )
+    {
+      FT2_1_3_Memory  memory = stream->memory;
+
+
+      FT2_1_3_Stream_Close( stream );
+
+      if ( !external )
+        FT2_1_3_FREE( stream );
+    }
+  }
+
+
+#undef  FT2_1_3_COMPONENT
+#define FT2_1_3_COMPONENT  trace_objs
+
+
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /****               FACE, SIZE & GLYPH SLOT OBJECTS                   ****/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+
+
+  static FT2_1_3_Error
+  ft_glyphslot_init( FT2_1_3_GlyphSlot  slot )
+  {
+    FT2_1_3_Driver         driver = slot->face->driver;
+    FT2_1_3_Driver_Class   clazz  = driver->clazz;
+    FT2_1_3_Memory         memory = driver->root.memory;
+    FT2_1_3_Error          error  = FT2_1_3_Err_Ok;
+    FT2_1_3_Slot_Internal  internal;
+
+
+    slot->library = driver->root.library;
+
+    if ( FT2_1_3_NEW( internal ) )
+      goto Exit;
+
+    slot->internal = internal;
+
+    if ( FT2_1_3_DRIVER_USES_OUTLINES( driver ) )
+      error = FT2_1_3_GlyphLoader_New( memory, &internal->loader );
+
+    if ( !error && clazz->init_slot )
+      error = clazz->init_slot( slot );
+
+  Exit:
+    return error;
+  }
+
+
+  static void
+  ft_glyphslot_clear( FT2_1_3_GlyphSlot  slot )
+  {
+    /* free bitmap if needed */
+    if ( slot->flags & FT2_1_3_GLYPH_OWN_BITMAP )
+    {
+      FT2_1_3_Memory  memory = FT2_1_3_FACE_MEMORY( slot->face );
+
+
+      FT2_1_3_FREE( slot->bitmap.buffer );
+      slot->flags &= ~FT2_1_3_GLYPH_OWN_BITMAP;
+    }
+
+    /* clear all public fields in the glyph slot */
+    FT2_1_3_ZERO( &slot->metrics );
+    FT2_1_3_ZERO( &slot->outline );
+
+    slot->bitmap.width = 0;
+    slot->bitmap.rows  = 0;
+    slot->bitmap.pitch = 0;
+    slot->bitmap.pixel_mode = 0;
+    /* don't touch 'slot->bitmap.buffer' !! */
+
+    slot->bitmap_left   = 0;
+    slot->bitmap_top    = 0;
+    slot->num_subglyphs = 0;
+    slot->subglyphs     = 0;
+    slot->control_data  = 0;
+    slot->control_len   = 0;
+    slot->other         = 0;
+    slot->format        = FT2_1_3_GLYPH_FORMAT_NONE;
+
+    slot->linearHoriAdvance = 0;
+    slot->linearVertAdvance = 0;
+  }
+
+
+  static void
+  ft_glyphslot_done( FT2_1_3_GlyphSlot  slot )
+  {
+    FT2_1_3_Driver         driver = slot->face->driver;
+    FT2_1_3_Driver_Class   clazz  = driver->clazz;
+    FT2_1_3_Memory         memory = driver->root.memory;
+
+
+    if ( clazz->done_slot )
+      clazz->done_slot( slot );
+
+    /* free bitmap buffer if needed */
+    if ( slot->flags & FT2_1_3_GLYPH_OWN_BITMAP )
+      FT2_1_3_FREE( slot->bitmap.buffer );
+
+    /* free glyph loader */
+    if ( FT2_1_3_DRIVER_USES_OUTLINES( driver ) )
+    {
+      FT2_1_3_GlyphLoader_Done( slot->internal->loader );
+      slot->internal->loader = 0;
+    }
+
+    FT2_1_3_FREE( slot->internal );
+  }
+
+
+  /* documentation is in ftobjs.h */
+
+  FT2_1_3_BASE_DEF( FT2_1_3_Error )
+  FT2_1_3_New_GlyphSlot( FT2_1_3_Face        face,
+                    FT2_1_3_GlyphSlot  *aslot )
+  {
+    FT2_1_3_Error          error;
+    FT2_1_3_Driver         driver;
+    FT2_1_3_Driver_Class   clazz;
+    FT2_1_3_Memory         memory;
+    FT2_1_3_GlyphSlot      slot;
+
+
+    if ( !face || !aslot || !face->driver )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    *aslot = 0;
+
+    driver = face->driver;
+    clazz  = driver->clazz;
+    memory = driver->root.memory;
+
+    FT2_1_3_TRACE4(( "FT2_1_3_New_GlyphSlot: Creating new slot object\n" ));
+    if ( !FT2_1_3_ALLOC( slot, clazz->slot_object_size ) )
+    {
+      slot->face = face;
+
+      error = ft_glyphslot_init( slot );
+      if ( error )
+      {
+        ft_glyphslot_done( slot );
+        FT2_1_3_FREE( slot );
+        goto Exit;
+      }
+
+      *aslot = slot;
+    }
+
+  Exit:
+    FT2_1_3_TRACE4(( "FT2_1_3_New_GlyphSlot: Return %d\n", error ));
+    return error;
+  }
+
+
+  /* documentation is in ftobjs.h */
+
+  FT2_1_3_BASE_DEF( void )
+  FT2_1_3_Done_GlyphSlot( FT2_1_3_GlyphSlot  slot )
+  {
+    if ( slot )
+    {
+      FT2_1_3_Driver      driver = slot->face->driver;
+      FT2_1_3_Memory      memory = driver->root.memory;
+      FT2_1_3_GlyphSlot*  parent;
+      FT2_1_3_GlyphSlot   cur;
+
+
+      /* Remove slot from its parent face's list */
+      parent = &slot->face->glyph;
+      cur    = *parent;
+
+      while ( cur )
+      {
+        if ( cur == slot )
+        {
+          *parent = cur->next;
+          ft_glyphslot_done( slot );
+          FT2_1_3_FREE( slot );
+          break;
+        }
+        cur = cur->next;
+      }
+    }
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( void )
+  FT2_1_3_Set_Transform( FT2_1_3_Face     face,
+                    FT2_1_3_Matrix*  matrix,
+                    FT2_1_3_Vector*  delta )
+  {
+    FT2_1_3_Face_Internal  internal;
+
+
+    if ( !face )
+      return;
+
+    internal = face->internal;
+
+    internal->transform_flags = 0;
+
+    if ( !matrix )
+    {
+      internal->transform_matrix.xx = 0x10000L;
+      internal->transform_matrix.xy = 0;
+      internal->transform_matrix.yx = 0;
+      internal->transform_matrix.yy = 0x10000L;
+      matrix = &internal->transform_matrix;
+    }
+    else
+      internal->transform_matrix = *matrix;
+
+    /* set transform_flags bit flag 0 if `matrix' isn't the identity */
+    if ( ( matrix->xy | matrix->yx ) ||
+         matrix->xx != 0x10000L      ||
+         matrix->yy != 0x10000L      )
+      internal->transform_flags |= 1;
+
+    if ( !delta )
+    {
+      internal->transform_delta.x = 0;
+      internal->transform_delta.y = 0;
+      delta = &internal->transform_delta;
+    }
+    else
+      internal->transform_delta = *delta;
+
+    /* set transform_flags bit flag 1 if `delta' isn't the null vector */
+    if ( delta->x | delta->y )
+      internal->transform_flags |= 2;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( void )
+  FT2_1_3_Set_Hint_Flags( FT2_1_3_Face     face,
+                     FT2_1_3_ULong    flags )
+  {
+    FT2_1_3_Face_Internal  internal;
+
+    if ( !face )
+      return;
+
+    internal = face->internal;
+
+    internal->hint_flags = (FT2_1_3_UInt)flags;
+  }
+
+
+  static FT2_1_3_Renderer
+  ft_lookup_glyph_renderer( FT2_1_3_GlyphSlot  slot );
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Load_Glyph( FT2_1_3_Face   face,
+                 FT2_1_3_UInt   glyph_index,
+                 FT2_1_3_Int32  load_flags )
+  {
+    FT2_1_3_Error      error;
+    FT2_1_3_Driver     driver;
+    FT2_1_3_GlyphSlot  slot;
+    FT2_1_3_Library    library;
+    FT2_1_3_Bool       autohint;
+    FT2_1_3_Module     hinter;
+
+
+    if ( !face || !face->size || !face->glyph )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    if ( glyph_index > (FT2_1_3_UInt)face->num_glyphs )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    slot = face->glyph;
+    ft_glyphslot_clear( slot );
+
+    driver = face->driver;
+
+    /* if the flag NO_RECURSE is set, we disable hinting and scaling */
+    if ( load_flags & FT2_1_3_LOAD_NO_RECURSE )
+    {
+      /* disable scaling, hinting, and transformation */
+      load_flags |= FT2_1_3_LOAD_NO_SCALE         |
+                    FT2_1_3_LOAD_NO_HINTING       |
+                    FT2_1_3_LOAD_NO_BITMAP        |
+                    FT2_1_3_LOAD_IGNORE_TRANSFORM;
+
+      /* disable bitmap rendering */
+      load_flags &= ~FT2_1_3_LOAD_RENDER;
+    }
+
+    /* do we need to load the glyph through the auto-hinter? */
+    library  = driver->root.library;
+    hinter   = library->auto_hinter;
+    autohint =
+      FT2_1_3_BOOL( hinter                                      &&
+               !( load_flags & ( FT2_1_3_LOAD_NO_SCALE    |
+                                 FT2_1_3_LOAD_NO_HINTING  |
+                                 FT2_1_3_LOAD_NO_AUTOHINT ) )   &&
+               FT2_1_3_DRIVER_IS_SCALABLE( driver )             &&
+               FT2_1_3_DRIVER_USES_OUTLINES( driver )           );
+    if ( autohint )
+    {
+      if ( FT2_1_3_DRIVER_HAS_HINTER( driver ) &&
+           !( load_flags & FT2_1_3_LOAD_FORCE_AUTOHINT ) )
+        autohint = 0;
+    }
+
+    if ( autohint )
+    {
+      FT2_1_3_AutoHinter_Service  hinting;
+
+
+      /* try to load embedded bitmaps first if available            */
+      /*                                                            */
+      /* XXX: This is really a temporary hack that should disappear */
+      /*      promptly with FreeType 2.1!                           */
+      /*                                                            */
+      if ( FT2_1_3_HAS_FIXED_SIZES( face )             &&
+          ( load_flags & FT2_1_3_LOAD_NO_BITMAP ) == 0 )
+      {
+        error = driver->clazz->load_glyph( slot, face->size,
+                                           glyph_index,
+                                           load_flags | FT2_1_3_LOAD_SBITS_ONLY );
+
+        if ( !error && slot->format == FT2_1_3_GLYPH_FORMAT_BITMAP )
+          goto Load_Ok;
+      }
+
+      /* load auto-hinted outline */
+      hinting = (FT2_1_3_AutoHinter_Service)hinter->clazz->module_interface;
+
+      error   = hinting->load_glyph( (FT2_1_3_AutoHinter)hinter,
+                                     slot, face->size,
+                                     glyph_index, load_flags );
+    }
+    else
+    {
+      error = driver->clazz->load_glyph( slot,
+                                         face->size,
+                                         glyph_index,
+                                         load_flags );
+      if ( error )
+        goto Exit;
+
+      /* check that the loaded outline is correct */
+      error = FT2_1_3_Outline_Check( &slot->outline );
+      if ( error )
+        goto Exit;
+    }
+
+  Load_Ok:
+    /* compute the advance */
+    if ( load_flags & FT2_1_3_LOAD_VERTICAL_LAYOUT )
+    {
+      slot->advance.x = 0;
+      slot->advance.y = slot->metrics.vertAdvance;
+    }
+    else
+    {
+      slot->advance.x = slot->metrics.horiAdvance;
+      slot->advance.y = 0;
+    }
+
+    /* compute the linear advance in 16.16 pixels */
+    if ( ( load_flags & FT2_1_3_LOAD_LINEAR_DESIGN ) == 0 )
+    {
+      FT2_1_3_UInt           EM      = face->units_per_EM;
+      FT2_1_3_Size_Metrics*  metrics = &face->size->metrics;
+
+
+      slot->linearHoriAdvance = FT2_1_3_MulDiv( slot->linearHoriAdvance,
+                                           (FT2_1_3_Long)metrics->x_ppem << 16, EM );
+
+      slot->linearVertAdvance = FT2_1_3_MulDiv( slot->linearVertAdvance,
+                                           (FT2_1_3_Long)metrics->y_ppem << 16, EM );
+    }
+
+    if ( ( load_flags & FT2_1_3_LOAD_IGNORE_TRANSFORM ) == 0 )
+    {
+      FT2_1_3_Face_Internal  internal = face->internal;
+
+
+      /* now, transform the glyph image if needed */
+      if ( internal->transform_flags )
+      {
+        /* get renderer */
+        FT2_1_3_Renderer  renderer = ft_lookup_glyph_renderer( slot );
+
+
+        if ( renderer )
+          error = renderer->clazz->transform_glyph(
+                                     renderer, slot,
+                                     &internal->transform_matrix,
+                                     &internal->transform_delta );
+        /* transform advance */
+        FT2_1_3_Vector_Transform( &slot->advance, &internal->transform_matrix );
+      }
+    }
+
+    /* do we need to render the image now? */
+    if ( !error                                    &&
+         slot->format != FT2_1_3_GLYPH_FORMAT_BITMAP    &&
+         slot->format != FT2_1_3_GLYPH_FORMAT_COMPOSITE &&
+         load_flags & FT2_1_3_LOAD_RENDER )
+    {
+      FT2_1_3_Render_Mode  mode = FT2_1_3_LOAD_TARGET_MODE( load_flags );
+
+
+      if ( mode == FT2_1_3_RENDER_MODE_NORMAL      &&
+           (load_flags & FT2_1_3_LOAD_MONOCHROME ) )
+        mode = FT2_1_3_RENDER_MODE_MONO;
+
+      error = FT2_1_3_Render_Glyph( slot, mode );
+    }
+
+  Exit:
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Load_Char( FT2_1_3_Face   face,
+                FT2_1_3_ULong  char_code,
+                FT2_1_3_Int32  load_flags )
+  {
+    FT2_1_3_UInt  glyph_index;
+
+
+    if ( !face )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    glyph_index = (FT2_1_3_UInt)char_code;
+    if ( face->charmap )
+      glyph_index = FT2_1_3_Get_Char_Index( face, char_code );
+
+    return FT2_1_3_Load_Glyph( face, glyph_index, load_flags );
+  }
+
+
+  /* destructor for sizes list */
+  static void
+  destroy_size( FT2_1_3_Memory  memory,
+                FT2_1_3_Size    size,
+                FT2_1_3_Driver  driver )
+  {
+    /* finalize client-specific data */
+    if ( size->generic.finalizer )
+      size->generic.finalizer( size );
+
+    /* finalize format-specific stuff */
+    if ( driver->clazz->done_size )
+      driver->clazz->done_size( size );
+
+    FT2_1_3_FREE( size->internal );
+    FT2_1_3_FREE( size );
+  }
+
+
+  /* destructor for faces list */
+  static void
+  destroy_face( FT2_1_3_Memory  memory,
+                FT2_1_3_Face    face,
+                FT2_1_3_Driver  driver )
+  {
+    FT2_1_3_Driver_Class  clazz = driver->clazz;
+
+
+    /* discard auto-hinting data */
+    if ( face->autohint.finalizer )
+      face->autohint.finalizer( face->autohint.data );
+
+    /* Discard glyph slots for this face.                           */
+    /* Beware!  FT2_1_3_Done_GlyphSlot() changes the field `face->glyph' */
+    while ( face->glyph )
+      FT2_1_3_Done_GlyphSlot( face->glyph );
+
+    /* discard all sizes for this face */
+    FT2_1_3_List_Finalize( &face->sizes_list,
+                     (FT2_1_3_List_Destructor)destroy_size,
+                     memory,
+                     driver );
+    face->size = 0;
+
+    /* now discard client data */
+    if ( face->generic.finalizer )
+      face->generic.finalizer( face );
+
+    /* discard charmaps */
+    {
+      FT2_1_3_Int  n;
+
+
+      for ( n = 0; n < face->num_charmaps; n++ )
+      {
+        FT2_1_3_CMap  cmap = FT2_1_3_CMAP( face->charmaps[n] );
+
+
+        FT2_1_3_CMap_Done( cmap );
+
+        face->charmaps[n] = NULL;
+      }
+
+      FT2_1_3_FREE( face->charmaps );
+      face->num_charmaps = 0;
+    }
+
+
+    /* finalize format-specific stuff */
+    if ( clazz->done_face )
+      clazz->done_face( face );
+
+    /* close the stream for this face if needed */
+    ft_input_stream_free(
+      face->stream,
+      ( face->face_flags & FT2_1_3_FACE_FLAG_EXTERNAL_STREAM ) != 0 );
+
+    face->stream = 0;
+
+    /* get rid of it */
+    if ( face->internal )
+    {
+      FT2_1_3_FREE( face->internal->postscript_name );
+      FT2_1_3_FREE( face->internal );
+    }
+    FT2_1_3_FREE( face );
+  }
+
+
+  static void
+  Destroy_Driver( FT2_1_3_Driver  driver )
+  {
+    FT2_1_3_List_Finalize( &driver->faces_list,
+                      (FT2_1_3_List_Destructor)destroy_face,
+                      driver->root.memory,
+                      driver );
+
+    /* check whether we need to drop the driver's glyph loader */
+    if ( FT2_1_3_DRIVER_USES_OUTLINES( driver ) )
+      FT2_1_3_GlyphLoader_Done( driver->glyph_loader );
+  }
+
+
+  /*************************************************************************/
+  /*                                                                       */
+  /* <Function>                                                            */
+  /*    open_face                                                          */
+  /*                                                                       */
+  /* <Description>                                                         */
+  /*    This function does some work for FT2_1_3_Open_Face().                   */
+  /*                                                                       */
+  static FT2_1_3_Error
+  open_face( FT2_1_3_Driver      driver,
+             FT2_1_3_Stream      stream,
+             FT2_1_3_Long        face_index,
+             FT2_1_3_Int         num_params,
+             FT2_1_3_Parameter*  params,
+             FT2_1_3_Face*       aface )
+  {
+    FT2_1_3_Memory         memory;
+    FT2_1_3_Driver_Class  clazz;
+    FT2_1_3_Face           face = 0;
+    FT2_1_3_Error          error;
+    FT2_1_3_Face_Internal  internal;
+
+
+    clazz  = driver->clazz;
+    memory = driver->root.memory;
+
+    /* allocate the face object and perform basic initialization */
+    if ( FT2_1_3_ALLOC( face, clazz->face_object_size ) )
+      goto Fail;
+
+    if ( FT2_1_3_NEW( internal ) )
+      goto Fail;
+
+    face->internal = internal;
+
+    face->driver   = driver;
+    face->memory   = memory;
+    face->stream   = stream;
+
+#ifdef FT2_1_3_CONFIG_OPTION_INCREMENTAL
+    {
+      int  i;
+
+
+      face->internal->incremental_interface = 0;
+      for ( i = 0; i < num_params && !face->internal->incremental_interface;
+            i++ )
+        if ( params[i].tag == FT2_1_3_PARAM_TAG_INCREMENTAL )
+          face->internal->incremental_interface = params[i].data;
+	}
+#endif
+
+    error = clazz->init_face( stream,
+                              face,
+                              (FT2_1_3_Int)face_index,
+                              num_params,
+                              params );
+    if ( error )
+      goto Fail;
+
+    /* select Unicode charmap by default */
+    {
+      FT2_1_3_Int      nn;
+      FT2_1_3_CharMap  unicmap = NULL, cmap;
+
+
+      for ( nn = 0; nn < face->num_charmaps; nn++ )
+      {
+        cmap = face->charmaps[nn];
+
+        if ( cmap->encoding == FT2_1_3_ENCODING_UNICODE )
+        {
+          unicmap = cmap;
+          break;
+        }
+      }
+
+      if ( unicmap != NULL )
+        face->charmap = unicmap;
+    }
+
+    *aface = face;
+
+  Fail:
+    if ( error )
+    {
+      clazz->done_face( face );
+      FT2_1_3_FREE( face->internal );
+      FT2_1_3_FREE( face );
+      *aface = 0;
+    }
+
+    return error;
+  }
+
+
+  /* there's a Mac-specific extended implementation of FT2_1_3_New_Face() */
+  /* in src/base/ftmac.c                                             */
+
+//#ifndef FT2_1_3_MACINTOSH
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_New_Face( FT2_1_3_Library   library,
+               const char*  pathname,
+               FT2_1_3_Long      face_index,
+               FT2_1_3_Face     *aface )
+  {
+    FT2_1_3_Open_Args  args;
+
+
+    /* test for valid `library' and `aface' delayed to FT2_1_3_Open_Face() */
+    if ( !pathname )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    args.flags    = FT2_1_3_OPEN_PATHNAME;
+    args.pathname = (char*)pathname;
+
+    return FT2_1_3_Open_Face( library, &args, face_index, aface );
+  }
+
+//#endif  /* !FT2_1_3_MACINTOSH */
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_New_Memory_Face( FT2_1_3_Library      library,
+                      const FT2_1_3_Byte*  file_base,
+                      FT2_1_3_Long         file_size,
+                      FT2_1_3_Long         face_index,
+                      FT2_1_3_Face        *aface )
+  {
+    FT2_1_3_Open_Args  args;
+
+
+    /* test for valid `library' and `face' delayed to FT2_1_3_Open_Face() */
+    if ( !file_base )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    args.flags       = FT2_1_3_OPEN_MEMORY;
+    args.memory_base = file_base;
+    args.memory_size = file_size;
+
+    return FT2_1_3_Open_Face( library, &args, face_index, aface );
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Open_Face( FT2_1_3_Library           library,
+                const FT2_1_3_Open_Args*  args,
+                FT2_1_3_Long              face_index,
+                FT2_1_3_Face             *aface )
+  {
+    FT2_1_3_Error     error;
+    FT2_1_3_Driver    driver;
+    FT2_1_3_Memory    memory;
+    FT2_1_3_Stream    stream;
+    FT2_1_3_Face      face = 0;
+    FT2_1_3_ListNode  node = 0;
+    FT2_1_3_Bool      external_stream;
+
+
+    /* test for valid `library' delayed to */
+    /* ft_input_stream_new()               */
+
+    if ( !aface || !args )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    *aface = 0;
+
+    external_stream = FT2_1_3_BOOL( ( args->flags & FT2_1_3_OPEN_STREAM ) &&
+                               args->stream                     );
+
+    /* create input stream */
+    error = ft_input_stream_new( library, args, &stream );
+    if ( error )
+      goto Exit;
+
+    memory = library->memory;
+
+    /* If the font driver is specified in the `args' structure, use */
+    /* it.  Otherwise, we scan the list of registered drivers.      */
+    if ( ( args->flags & FT2_1_3_OPEN_DRIVER ) && args->driver )
+    {
+      driver = FT2_1_3_DRIVER( args->driver );
+
+      /* not all modules are drivers, so check... */
+      if ( FT2_1_3_MODULE_IS_DRIVER( driver ) )
+      {
+        FT2_1_3_Int         num_params = 0;
+        FT2_1_3_Parameter*  params     = 0;
+
+
+        if ( args->flags & FT2_1_3_OPEN_PARAMS )
+        {
+          num_params = args->num_params;
+          params     = args->params;
+        }
+
+        error = open_face( driver, stream, face_index,
+                           num_params, params, &face );
+        if ( !error )
+          goto Success;
+      }
+      else
+        error = FT2_1_3_Err_Invalid_Handle;
+
+      ft_input_stream_free( stream, external_stream );
+      goto Fail;
+    }
+    else
+    {
+      /* check each font driver for an appropriate format */
+      FT2_1_3_Module*  cur   = library->modules;
+      FT2_1_3_Module*  limit = cur + library->num_modules;
+
+
+      for ( ; cur < limit; cur++ )
+      {
+        /* not all modules are font drivers, so check... */
+        if ( FT2_1_3_MODULE_IS_DRIVER( cur[0] ) )
+        {
+          FT2_1_3_Int         num_params = 0;
+          FT2_1_3_Parameter*  params     = 0;
+
+
+          driver = FT2_1_3_DRIVER( cur[0] );
+
+          if ( args->flags & FT2_1_3_OPEN_PARAMS )
+          {
+            num_params = args->num_params;
+            params     = args->params;
+          }
+
+          error = open_face( driver, stream, face_index,
+                            num_params, params, &face );
+          if ( !error )
+            goto Success;
+
+          if ( FT2_1_3_ERROR_BASE( error ) != FT2_1_3_Err_Unknown_File_Format )
+            goto Fail2;
+        }
+      }
+
+      /* no driver is able to handle this format */
+      error = FT2_1_3_Err_Unknown_File_Format;
+
+  Fail2:
+      ft_input_stream_free( stream, external_stream );
+      goto Fail;
+    }
+
+  Success:
+    FT2_1_3_TRACE4(( "FT2_1_3_Open_Face: New face object, adding to list\n" ));
+
+    /* set the FT2_1_3_FACE_FLAG_EXTERNAL_STREAM bit for FT2_1_3_Done_Face */
+    if ( external_stream )
+      face->face_flags |= FT2_1_3_FACE_FLAG_EXTERNAL_STREAM;
+
+    /* add the face object to its driver's list */
+    if ( FT2_1_3_NEW( node ) )
+      goto Fail;
+
+    node->data = face;
+    /* don't assume driver is the same as face->driver, so use */
+    /* face->driver instead.                                   */
+    FT2_1_3_List_Add( &face->driver->faces_list, node );
+
+    /* now allocate a glyph slot object for the face */
+    {
+      FT2_1_3_GlyphSlot  slot;
+
+
+      FT2_1_3_TRACE4(( "FT2_1_3_Open_Face: Creating glyph slot\n" ));
+
+      error = FT2_1_3_New_GlyphSlot( face, &slot );
+      if ( error )
+        goto Fail;
+
+      face->glyph = slot;
+    }
+
+    /* finally, allocate a size object for the face */
+    {
+      FT2_1_3_Size  size;
+
+
+      FT2_1_3_TRACE4(( "FT2_1_3_Open_Face: Creating size object\n" ));
+
+      error = FT2_1_3_New_Size( face, &size );
+      if ( error )
+        goto Fail;
+
+      face->size = size;
+    }
+
+    /* initialize internal face data */
+    {
+      FT2_1_3_Face_Internal  internal = face->internal;
+
+
+      internal->transform_matrix.xx = 0x10000L;
+      internal->transform_matrix.xy = 0;
+      internal->transform_matrix.yx = 0;
+      internal->transform_matrix.yy = 0x10000L;
+
+      internal->transform_delta.x = 0;
+      internal->transform_delta.y = 0;
+    }
+
+    *aface = face;
+    goto Exit;
+
+  Fail:
+    FT2_1_3_Done_Face( face );
+
+  Exit:
+    FT2_1_3_TRACE4(( "FT2_1_3_Open_Face: Return %d\n", error ));
+
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Attach_File( FT2_1_3_Face      face,
+                  const char*  filepathname )
+  {
+    FT2_1_3_Open_Args  open;
+
+
+    /* test for valid `face' delayed to FT2_1_3_Attach_Stream() */
+
+    if ( !filepathname )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    open.flags    = FT2_1_3_OPEN_PATHNAME;
+    open.pathname = (char*)filepathname;
+
+    return FT2_1_3_Attach_Stream( face, &open );
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Attach_Stream( FT2_1_3_Face        face,
+                    FT2_1_3_Open_Args*  parameters )
+  {
+    FT2_1_3_Stream  stream;
+    FT2_1_3_Error   error;
+    FT2_1_3_Driver  driver;
+
+    FT2_1_3_Driver_Class  clazz;
+
+
+    /* test for valid `parameters' delayed to ft_input_stream_new() */
+
+    if ( !face )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    driver = face->driver;
+    if ( !driver )
+      return FT2_1_3_Err_Invalid_Driver_Handle;
+
+    error = ft_input_stream_new( driver->root.library, parameters, &stream );
+    if ( error )
+      goto Exit;
+
+    /* we implement FT2_1_3_Attach_Stream in each driver through the */
+    /* `attach_file' interface                                  */
+
+    error = FT2_1_3_Err_Unimplemented_Feature;
+    clazz = driver->clazz;
+    if ( clazz->attach_file )
+      error = clazz->attach_file( face, stream );
+
+    /* close the attached stream */
+    ft_input_stream_free( stream,
+                    (FT2_1_3_Bool)( parameters->stream &&
+                               ( parameters->flags & FT2_1_3_OPEN_STREAM ) ) );
+
+  Exit:
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Done_Face( FT2_1_3_Face  face )
+  {
+    FT2_1_3_Error     error;
+    FT2_1_3_Driver    driver;
+    FT2_1_3_Memory    memory;
+    FT2_1_3_ListNode  node;
+
+
+    error = FT2_1_3_Err_Invalid_Face_Handle;
+    if ( face && face->driver )
+    {
+      driver = face->driver;
+      memory = driver->root.memory;
+
+      /* find face in driver's list */
+      node = FT2_1_3_List_Find( &driver->faces_list, face );
+      if ( node )
+      {
+        /* remove face object from the driver's list */
+        FT2_1_3_List_Remove( &driver->faces_list, node );
+        FT2_1_3_FREE( node );
+
+        /* now destroy the object proper */
+        destroy_face( memory, face, driver );
+        error = FT2_1_3_Err_Ok;
+      }
+    }
+    return error;
+  }
+
+
+  /* documentation is in ftobjs.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_New_Size( FT2_1_3_Face   face,
+               FT2_1_3_Size  *asize )
+  {
+    FT2_1_3_Error         error;
+    FT2_1_3_Memory        memory;
+    FT2_1_3_Driver        driver;
+    FT2_1_3_Driver_Class  clazz;
+
+    FT2_1_3_Size          size = 0;
+    FT2_1_3_ListNode      node = 0;
+
+
+    if ( !face )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    if ( !asize )
+      return FT2_1_3_Err_Invalid_Size_Handle;
+
+    if ( !face->driver )
+      return FT2_1_3_Err_Invalid_Driver_Handle;
+
+    *asize = 0;
+
+    driver = face->driver;
+    clazz  = driver->clazz;
+    memory = face->memory;
+
+    /* Allocate new size object and perform basic initialisation */
+    if ( FT2_1_3_ALLOC( size, clazz->size_object_size ) || FT2_1_3_NEW( node ) )
+      goto Exit;
+
+    size->face = face;
+
+    /* for now, do not use any internal fields in size objects */
+    size->internal = 0;
+
+    if ( clazz->init_size )
+      error = clazz->init_size( size );
+
+    /* in case of success, add to the face's list */
+    if ( !error )
+    {
+      *asize     = size;
+      node->data = size;
+      FT2_1_3_List_Add( &face->sizes_list, node );
+    }
+
+  Exit:
+    if ( error )
+    {
+      FT2_1_3_FREE( node );
+      FT2_1_3_FREE( size );
+    }
+
+    return error;
+  }
+
+
+  /* documentation is in ftobjs.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Done_Size( FT2_1_3_Size  size )
+  {
+    FT2_1_3_Error     error;
+    FT2_1_3_Driver    driver;
+    FT2_1_3_Memory    memory;
+    FT2_1_3_Face      face;
+    FT2_1_3_ListNode  node;
+
+
+    if ( !size )
+      return FT2_1_3_Err_Invalid_Size_Handle;
+
+    face = size->face;
+    if ( !face )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    driver = face->driver;
+    if ( !driver )
+      return FT2_1_3_Err_Invalid_Driver_Handle;
+
+    memory = driver->root.memory;
+
+    error = FT2_1_3_Err_Ok;
+    node  = FT2_1_3_List_Find( &face->sizes_list, size );
+    if ( node )
+    {
+      FT2_1_3_List_Remove( &face->sizes_list, node );
+      FT2_1_3_FREE( node );
+
+      if ( face->size == size )
+      {
+        face->size = 0;
+        if ( face->sizes_list.head )
+          face->size = (FT2_1_3_Size)(face->sizes_list.head->data);
+      }
+
+      destroy_size( memory, size, driver );
+    }
+    else
+      error = FT2_1_3_Err_Invalid_Size_Handle;
+
+    return error;
+  }
+
+
+  static void
+  ft_recompute_scaled_metrics( FT2_1_3_Face           face,
+                               FT2_1_3_Size_Metrics*  metrics )
+  {
+    /* Compute root ascender, descender, test height, and max_advance */
+
+    metrics->ascender    = ( FT2_1_3_MulFix( face->ascender,
+                                        metrics->y_scale ) + 32 ) & -64;
+
+    metrics->descender   = ( FT2_1_3_MulFix( face->descender,
+                                        metrics->y_scale ) + 32 ) & -64;
+
+    metrics->height      = ( FT2_1_3_MulFix( face->height,
+                                        metrics->y_scale ) + 32 ) & -64;
+
+    metrics->max_advance = ( FT2_1_3_MulFix( face->max_advance_width,
+                                        metrics->x_scale ) + 32 ) & -64;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Set_Char_Size( FT2_1_3_Face     face,
+                    FT2_1_3_F26Dot6  char_width,
+                    FT2_1_3_F26Dot6  char_height,
+                    FT2_1_3_UInt     horz_resolution,
+                    FT2_1_3_UInt     vert_resolution )
+  {
+    FT2_1_3_Error          error = FT2_1_3_Err_Ok;
+    FT2_1_3_Driver         driver;
+    FT2_1_3_Driver_Class   clazz;
+    FT2_1_3_Size_Metrics*  metrics;
+    FT2_1_3_Long           dim_x, dim_y;
+
+
+    if ( !face || !face->size || !face->driver )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    driver  = face->driver;
+    metrics = &face->size->metrics;
+
+    if ( !char_width )
+      char_width = char_height;
+
+    else if ( !char_height )
+      char_height = char_width;
+
+    if ( !horz_resolution )
+      horz_resolution = 72;
+
+    if ( !vert_resolution )
+      vert_resolution = 72;
+
+    driver = face->driver;
+    clazz  = driver->clazz;
+
+    /* default processing -- this can be overridden by the driver */
+    if ( char_width  < 1 * 64 )
+      char_width  = 1 * 64;
+    if ( char_height < 1 * 64 )
+      char_height = 1 * 64;
+
+    /* Compute pixel sizes in 26.6 units */
+    dim_x = ( ( ( char_width  * horz_resolution ) / 72 ) + 32 ) & -64;
+    dim_y = ( ( ( char_height * vert_resolution ) / 72 ) + 32 ) & -64;
+
+    metrics->x_ppem  = (FT2_1_3_UShort)( dim_x >> 6 );
+    metrics->y_ppem  = (FT2_1_3_UShort)( dim_y >> 6 );
+
+    metrics->x_scale = 0x10000L;
+    metrics->y_scale = 0x10000L;
+
+    if ( face->face_flags & FT2_1_3_FACE_FLAG_SCALABLE )
+    {
+      metrics->x_scale = FT2_1_3_DivFix( dim_x, face->units_per_EM );
+      metrics->y_scale = FT2_1_3_DivFix( dim_y, face->units_per_EM );
+
+      ft_recompute_scaled_metrics( face, metrics );
+    }
+
+    if ( clazz->set_char_sizes )
+      error = clazz->set_char_sizes( face->size,
+                                     char_width,
+                                     char_height,
+                                     horz_resolution,
+                                     vert_resolution );
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Set_Pixel_Sizes( FT2_1_3_Face  face,
+                      FT2_1_3_UInt  pixel_width,
+                      FT2_1_3_UInt  pixel_height )
+  {
+    FT2_1_3_Error          error = FT2_1_3_Err_Ok;
+    FT2_1_3_Driver         driver;
+    FT2_1_3_Driver_Class   clazz;
+    FT2_1_3_Size_Metrics*  metrics = &face->size->metrics;
+
+
+    if ( !face || !face->size || !face->driver )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    driver = face->driver;
+    clazz  = driver->clazz;
+
+    /* default processing -- this can be overridden by the driver */
+    if ( pixel_width == 0 )
+      pixel_width = pixel_height;
+
+    else if ( pixel_height == 0 )
+      pixel_height = pixel_width;
+
+    if ( pixel_width  < 1 )
+      pixel_width  = 1;
+    if ( pixel_height < 1 )
+      pixel_height = 1;
+
+    metrics->x_ppem = (FT2_1_3_UShort)pixel_width;
+    metrics->y_ppem = (FT2_1_3_UShort)pixel_height;
+
+    if ( face->face_flags & FT2_1_3_FACE_FLAG_SCALABLE )
+    {
+      metrics->x_scale = FT2_1_3_DivFix( metrics->x_ppem << 6,
+                                    face->units_per_EM );
+
+      metrics->y_scale = FT2_1_3_DivFix( metrics->y_ppem << 6,
+                                    face->units_per_EM );
+
+      ft_recompute_scaled_metrics( face, metrics );
+    }
+
+    if ( clazz->set_pixel_sizes )
+      error = clazz->set_pixel_sizes( face->size,
+                                      pixel_width,
+                                      pixel_height );
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Get_Kerning( FT2_1_3_Face     face,
+                  FT2_1_3_UInt     left_glyph,
+                  FT2_1_3_UInt     right_glyph,
+                  FT2_1_3_UInt     kern_mode,
+                  FT2_1_3_Vector  *akerning )
+  {
+    FT2_1_3_Error   error = FT2_1_3_Err_Ok;
+    FT2_1_3_Driver  driver;
+
+
+    if ( !face )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    if ( !akerning )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    driver = face->driver;
+
+    akerning->x = 0;
+    akerning->y = 0;
+
+    if ( driver->clazz->get_kerning )
+    {
+      error = driver->clazz->get_kerning( face,
+                                          left_glyph,
+                                          right_glyph,
+                                          akerning );
+      if ( !error )
+      {
+        if ( kern_mode != FT2_1_3_KERNING_UNSCALED )
+        {
+          akerning->x = FT2_1_3_MulFix( akerning->x, face->size->metrics.x_scale );
+          akerning->y = FT2_1_3_MulFix( akerning->y, face->size->metrics.y_scale );
+
+          if ( kern_mode != FT2_1_3_KERNING_UNFITTED )
+          {
+            akerning->x = ( akerning->x + 32 ) & -64;
+            akerning->y = ( akerning->y + 32 ) & -64;
+          }
+        }
+      }
+    }
+
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Select_Charmap( FT2_1_3_Face      face,
+                     FT2_1_3_Encoding  encoding )
+  {
+    FT2_1_3_CharMap*  cur;
+    FT2_1_3_CharMap*  limit;
+
+
+    if ( !face )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    cur = face->charmaps;
+    if ( !cur )
+      return FT2_1_3_Err_Invalid_CharMap_Handle;
+
+    limit = cur + face->num_charmaps;
+
+    for ( ; cur < limit; cur++ )
+    {
+      if ( cur[0]->encoding == encoding )
+      {
+        face->charmap = cur[0];
+        return 0;
+      }
+    }
+
+    return FT2_1_3_Err_Invalid_Argument;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Set_Charmap( FT2_1_3_Face     face,
+                  FT2_1_3_CharMap  charmap )
+  {
+    FT2_1_3_CharMap*  cur;
+    FT2_1_3_CharMap*  limit;
+
+
+    if ( !face )
+      return FT2_1_3_Err_Invalid_Face_Handle;
+
+    cur = face->charmaps;
+    if ( !cur )
+      return FT2_1_3_Err_Invalid_CharMap_Handle;
+
+    limit = cur + face->num_charmaps;
+
+    for ( ; cur < limit; cur++ )
+    {
+      if ( cur[0] == charmap )
+      {
+        face->charmap = cur[0];
+        return 0;
+      }
+    }
+    return FT2_1_3_Err_Invalid_Argument;
+  }
+
+
+  FT2_1_3_BASE_DEF( void )
+  FT2_1_3_CMap_Done( FT2_1_3_CMap  cmap )
+  {
+    if ( cmap )
+    {
+      FT2_1_3_CMap_Class  clazz  = cmap->clazz;
+      FT2_1_3_Face        face   = cmap->charmap.face;
+      FT2_1_3_Memory      memory = FT2_1_3_FACE_MEMORY(face);
+
+
+      if ( clazz->done )
+        clazz->done( cmap );
+
+      FT2_1_3_FREE( cmap );
+    }
+  }
+
+
+  FT2_1_3_BASE_DEF( FT2_1_3_Error )
+  FT2_1_3_CMap_New( FT2_1_3_CMap_Class   clazz,
+               FT2_1_3_Pointer      init_data,
+               FT2_1_3_CharMap      charmap,
+               FT2_1_3_CMap        *acmap )
+  {
+    FT2_1_3_Error   error = 0;
+    FT2_1_3_Face    face;
+    FT2_1_3_Memory  memory;
+    FT2_1_3_CMap    cmap;
+
+
+    if ( clazz == NULL || charmap == NULL || charmap->face == NULL )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    face   = charmap->face;
+    memory = FT2_1_3_FACE_MEMORY(face);
+
+    if ( !FT2_1_3_ALLOC( cmap, clazz->size ) )
+    {
+      cmap->charmap = *charmap;
+      cmap->clazz   = clazz;
+
+      if ( clazz->init )
+      {
+        error = clazz->init( cmap, init_data );
+        if ( error )
+          goto Fail;
+      }
+
+      /* add it to our list of charmaps */
+      if ( FT2_1_3_RENEW_ARRAY( face->charmaps,
+                           face->num_charmaps,
+                           face->num_charmaps+1 ) )
+        goto Fail;
+
+      face->charmaps[face->num_charmaps++] = (FT2_1_3_CharMap)cmap;
+    }
+
+  Exit:
+    if ( acmap )
+      *acmap = cmap;
+
+    return error;
+
+  Fail:
+    FT2_1_3_CMap_Done( cmap );
+    cmap = NULL;
+    goto Exit;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_UInt )
+  FT2_1_3_Get_Char_Index( FT2_1_3_Face   face,
+                     FT2_1_3_ULong  charcode )
+  {
+    FT2_1_3_UInt  result = 0;
+
+
+    if ( face && face->charmap )
+    {
+      FT2_1_3_CMap  cmap = FT2_1_3_CMAP( face->charmap );
+
+
+      result = cmap->clazz->char_index( cmap, charcode );
+    }
+    return  result;
+  }
+
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_ULong )
+  FT2_1_3_Get_First_Char( FT2_1_3_Face   face,
+                     FT2_1_3_UInt  *agindex )
+  {
+    FT2_1_3_ULong  result = 0;
+    FT2_1_3_UInt   gindex = 0;
+
+
+    if ( face && face->charmap )
+    {
+      gindex = FT2_1_3_Get_Char_Index( face, 0 );
+      if ( gindex == 0 )
+        result = FT2_1_3_Get_Next_Char( face, 0, &gindex );
+    }
+
+    if ( agindex  )
+      *agindex = gindex;
+
+    return result;
+  }
+
+  /* documentation is in freetype.h */
+
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_ULong )
+  FT2_1_3_Get_Next_Char( FT2_1_3_Face   face,
+                    FT2_1_3_ULong  charcode,
+                    FT2_1_3_UInt  *agindex )
+  {
+    FT2_1_3_ULong  result = 0;
+    FT2_1_3_UInt   gindex = 0;
+
+
+    if ( face && face->charmap )
+    {
+      FT2_1_3_UInt32  code = (FT2_1_3_UInt32)charcode;
+      FT2_1_3_CMap    cmap = FT2_1_3_CMAP( face->charmap );
+
+
+      gindex = cmap->clazz->char_next( cmap, &code );
+      result = ( gindex == 0 ) ? 0 : code;
+    }
+
+    if ( agindex )
+      *agindex = gindex;
+
+    return result;
+  }
+
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_UInt )
+  FT2_1_3_Get_Name_Index( FT2_1_3_Face     face,
+                     FT2_1_3_String*  glyph_name )
+  {
+    FT2_1_3_UInt  result = 0;
+
+
+    if ( face && FT2_1_3_HAS_GLYPH_NAMES( face ) )
+    {
+      /* now, lookup for glyph name */
+      FT2_1_3_Driver         driver = face->driver;
+      FT2_1_3_Module_Class*  clazz  = FT2_1_3_MODULE_CLASS( driver );
+
+
+      if ( clazz->get_interface )
+      {
+        FT2_1_3_Face_GetGlyphNameIndexFunc  requester;
+
+
+        requester = (FT2_1_3_Face_GetGlyphNameIndexFunc)clazz->get_interface(
+                      FT2_1_3_MODULE( driver ), "name_index" );
+        if ( requester )
+          result = requester( face, glyph_name );
+      }
+    }
+
+    return result;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Get_Glyph_Name( FT2_1_3_Face     face,
+                     FT2_1_3_UInt     glyph_index,
+                     FT2_1_3_Pointer  buffer,
+                     FT2_1_3_UInt     buffer_max )
+  {
+    FT2_1_3_Error  error = FT2_1_3_Err_Invalid_Argument;
+
+
+    /* clean up buffer */
+    if ( buffer && buffer_max > 0 )
+      ((FT2_1_3_Byte*)buffer)[0] = 0;
+
+    if ( face                                     &&
+         glyph_index <= (FT2_1_3_UInt)face->num_glyphs &&
+         FT2_1_3_HAS_GLYPH_NAMES( face )               )
+    {
+      /* now, lookup for glyph name */
+      FT2_1_3_Driver         driver = face->driver;
+      FT2_1_3_Module_Class*  clazz  = FT2_1_3_MODULE_CLASS( driver );
+
+
+      if ( clazz->get_interface )
+      {
+        FT2_1_3_Face_GetGlyphNameFunc  requester;
+
+
+        requester = (FT2_1_3_Face_GetGlyphNameFunc)clazz->get_interface(
+                      FT2_1_3_MODULE( driver ), "glyph_name" );
+        if ( requester )
+          error = requester( face, glyph_index, buffer, buffer_max );
+      }
+    }
+
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( const char* )
+  FT2_1_3_Get_Postscript_Name( FT2_1_3_Face  face )
+  {
+    const char*  result = NULL;
+
+
+    if ( !face )
+      goto Exit;
+
+    result = face->internal->postscript_name;
+    if ( !result )
+    {
+      /* now, look up glyph name */
+      FT2_1_3_Driver         driver = face->driver;
+      FT2_1_3_Module_Class*  clazz  = FT2_1_3_MODULE_CLASS( driver );
+
+
+      if ( clazz->get_interface )
+      {
+        FT2_1_3_Face_GetPostscriptNameFunc  requester;
+
+
+        requester = (FT2_1_3_Face_GetPostscriptNameFunc)clazz->get_interface(
+                      FT2_1_3_MODULE( driver ), "postscript_name" );
+        if ( requester )
+          result = requester( face );
+      }
+    }
+  Exit:
+    return result;
+  }
+
+
+  /* documentation is in tttables.h */
+
+  FT2_1_3_EXPORT_DEF( void* )
+  FT2_1_3_Get_Sfnt_Table( FT2_1_3_Face      face,
+                     FT2_1_3_Sfnt_Tag  tag )
+  {
+    void*                   table = 0;
+    FT2_1_3_Get_Sfnt_Table_Func  func;
+    FT2_1_3_Driver               driver;
+
+
+    if ( !face || !FT2_1_3_IS_SFNT( face ) )
+      goto Exit;
+
+    driver = face->driver;
+    func = (FT2_1_3_Get_Sfnt_Table_Func)driver->root.clazz->get_interface(
+                                     FT2_1_3_MODULE( driver ), "get_sfnt" );
+    if ( func )
+      table = func( face, tag );
+
+  Exit:
+    return table;
+  }
+
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Activate_Size( FT2_1_3_Size  size )
+  {
+    FT2_1_3_Face  face;
+
+
+    if ( size == NULL )
+      return FT2_1_3_Err_Bad_Argument;
+
+    face = size->face;
+    if ( face == NULL || face->driver == NULL )
+      return FT2_1_3_Err_Bad_Argument;
+
+    /* we don't need anything more complex than that; all size objects */
+    /* are already listed by the face                                  */
+    face->size = size;
+
+    return FT2_1_3_Err_Ok;
+  }
+
+
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /****                        R E N D E R E R S                        ****/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+
+  /* lookup a renderer by glyph format in the library's list */
+  FT2_1_3_BASE_DEF( FT2_1_3_Renderer )
+  FT2_1_3_Lookup_Renderer( FT2_1_3_Library       library,
+                      FT2_1_3_Glyph_Format  format,
+                      FT2_1_3_ListNode*     node )
+  {
+    FT2_1_3_ListNode  cur;
+    FT2_1_3_Renderer  result = 0;
+
+
+    if ( !library )
+      goto Exit;
+
+    cur = library->renderers.head;
+
+    if ( node )
+    {
+      if ( *node )
+        cur = (*node)->next;
+      *node = 0;
+    }
+
+    while ( cur )
+    {
+      FT2_1_3_Renderer  renderer = FT2_1_3_RENDERER( cur->data );
+
+
+      if ( renderer->glyph_format == format )
+      {
+        if ( node )
+          *node = cur;
+
+        result = renderer;
+        break;
+      }
+      cur = cur->next;
+    }
+
+  Exit:
+    return result;
+  }
+
+
+  static FT2_1_3_Renderer
+  ft_lookup_glyph_renderer( FT2_1_3_GlyphSlot  slot )
+  {
+    FT2_1_3_Face      face    = slot->face;
+    FT2_1_3_Library   library = FT2_1_3_FACE_LIBRARY( face );
+    FT2_1_3_Renderer  result  = library->cur_renderer;
+
+
+    if ( !result || result->glyph_format != slot->format )
+      result = FT2_1_3_Lookup_Renderer( library, slot->format, 0 );
+
+    return result;
+  }
+
+
+  static void
+  ft_set_current_renderer( FT2_1_3_Library  library )
+  {
+    FT2_1_3_Renderer  renderer;
+
+
+    renderer = FT2_1_3_Lookup_Renderer( library, FT2_1_3_GLYPH_FORMAT_OUTLINE, 0 );
+    library->cur_renderer = renderer;
+  }
+
+
+  static FT2_1_3_Error
+  ft_add_renderer( FT2_1_3_Module  module )
+  {
+    FT2_1_3_Library   library = module->library;
+    FT2_1_3_Memory    memory  = library->memory;
+    FT2_1_3_Error     error;
+    FT2_1_3_ListNode  node;
+
+
+    if ( FT2_1_3_NEW( node ) )
+      goto Exit;
+
+    {
+      FT2_1_3_Renderer         render = FT2_1_3_RENDERER( module );
+      FT2_1_3_Renderer_Class*  clazz  = (FT2_1_3_Renderer_Class*)module->clazz;
+
+
+      render->clazz        = clazz;
+      render->glyph_format = clazz->glyph_format;
+
+      /* allocate raster object if needed */
+      if ( clazz->glyph_format == FT2_1_3_GLYPH_FORMAT_OUTLINE &&
+           clazz->raster_class->raster_new )
+      {
+        error = clazz->raster_class->raster_new( memory, &render->raster );
+        if ( error )
+          goto Fail;
+
+        render->raster_render = clazz->raster_class->raster_render;
+        render->render        = clazz->render_glyph;
+      }
+
+      /* add to list */
+      node->data = module;
+      FT2_1_3_List_Add( &library->renderers, node );
+
+      ft_set_current_renderer( library );
+    }
+
+  Fail:
+    if ( error )
+      FT2_1_3_FREE( node );
+
+  Exit:
+    return error;
+  }
+
+
+  static void
+  ft_remove_renderer( FT2_1_3_Module  module )
+  {
+    FT2_1_3_Library   library = module->library;
+    FT2_1_3_Memory    memory  = library->memory;
+    FT2_1_3_ListNode  node;
+
+
+    node = FT2_1_3_List_Find( &library->renderers, module );
+    if ( node )
+    {
+      FT2_1_3_Renderer  render = FT2_1_3_RENDERER( module );
+
+
+      /* release raster object, if any */
+      if ( render->raster )
+        render->clazz->raster_class->raster_done( render->raster );
+
+      /* remove from list */
+      FT2_1_3_List_Remove( &library->renderers, node );
+      FT2_1_3_FREE( node );
+
+      ft_set_current_renderer( library );
+    }
+  }
+
+
+  /* documentation is in ftrender.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Renderer )
+  FT2_1_3_Get_Renderer( FT2_1_3_Library       library,
+                   FT2_1_3_Glyph_Format  format )
+  {
+    /* test for valid `library' delayed to FT2_1_3_Lookup_Renderer() */
+
+    return FT2_1_3_Lookup_Renderer( library, format, 0 );
+  }
+
+
+  /* documentation is in ftrender.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Set_Renderer( FT2_1_3_Library     library,
+                   FT2_1_3_Renderer    renderer,
+                   FT2_1_3_UInt        num_params,
+                   FT2_1_3_Parameter*  parameters )
+  {
+    FT2_1_3_ListNode  node;
+    FT2_1_3_Error     error = FT2_1_3_Err_Ok;
+
+
+    if ( !library )
+      return FT2_1_3_Err_Invalid_Library_Handle;
+
+    if ( !renderer )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    node = FT2_1_3_List_Find( &library->renderers, renderer );
+    if ( !node )
+    {
+      error = FT2_1_3_Err_Invalid_Argument;
+      goto Exit;
+    }
+
+    FT2_1_3_List_Up( &library->renderers, node );
+
+    if ( renderer->glyph_format == FT2_1_3_GLYPH_FORMAT_OUTLINE )
+      library->cur_renderer = renderer;
+
+    if ( num_params > 0 )
+    {
+      FT2_1_3_Renderer_SetModeFunc  set_mode = renderer->clazz->set_mode;
+
+
+      for ( ; num_params > 0; num_params-- )
+      {
+        error = set_mode( renderer, parameters->tag, parameters->data );
+        if ( error )
+          break;
+      }
+    }
+
+  Exit:
+    return error;
+  }
+
+
+  FT2_1_3_BASE_DEF( FT2_1_3_Error )
+  FT2_1_3_Render_Glyph_Internal( FT2_1_3_Library      library,
+                            FT2_1_3_GlyphSlot    slot,
+                            FT2_1_3_Render_Mode  render_mode )
+  {
+    FT2_1_3_Error     error = FT2_1_3_Err_Ok;
+    FT2_1_3_Renderer  renderer;
+
+
+    /* if it is already a bitmap, no need to do anything */
+    switch ( slot->format )
+    {
+    case FT2_1_3_GLYPH_FORMAT_BITMAP:   /* already a bitmap, don't do anything */
+      break;
+
+    default:
+      {
+        FT2_1_3_ListNode  node   = 0;
+        FT2_1_3_Bool      update = 0;
+
+
+        /* small shortcut for the very common case */
+        if ( slot->format == FT2_1_3_GLYPH_FORMAT_OUTLINE )
+        {
+          renderer = library->cur_renderer;
+          node     = library->renderers.head;
+        }
+        else
+          renderer = FT2_1_3_Lookup_Renderer( library, slot->format, &node );
+
+        error = FT2_1_3_Err_Unimplemented_Feature;
+        while ( renderer )
+        {
+          error = renderer->render( renderer, slot, render_mode, NULL );
+          if ( !error ||
+               FT2_1_3_ERROR_BASE( error ) != FT2_1_3_Err_Cannot_Render_Glyph )
+            break;
+
+          /* FT2_1_3_Err_Cannot_Render_Glyph is returned if the render mode   */
+          /* is unsupported by the current renderer for this glyph image */
+          /* format.                                                     */
+
+          /* now, look for another renderer that supports the same */
+          /* format.                                               */
+          renderer = FT2_1_3_Lookup_Renderer( library, slot->format, &node );
+          update   = 1;
+        }
+
+        /* if we changed the current renderer for the glyph image format */
+        /* we need to select it as the next current one                  */
+        if ( !error && update && renderer )
+          FT2_1_3_Set_Renderer( library, renderer, 0, 0 );
+      }
+    }
+
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Render_Glyph( FT2_1_3_GlyphSlot    slot,
+                   FT2_1_3_Render_Mode  render_mode )
+  {
+    FT2_1_3_Library  library;
+
+
+    if ( !slot )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    library = FT2_1_3_FACE_LIBRARY( slot->face );
+
+    return FT2_1_3_Render_Glyph_Internal( library, slot, render_mode );
+  }
+
+
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /****                         M O D U L E S                           ****/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+
+
+  /*************************************************************************/
+  /*                                                                       */
+  /* <Function>                                                            */
+  /*    Destroy_Module                                                     */
+  /*                                                                       */
+  /* <Description>                                                         */
+  /*    Destroys a given module object.  For drivers, this also destroys   */
+  /*    all child faces.                                                   */
+  /*                                                                       */
+  /* <InOut>                                                               */
+  /*     module :: A handle to the target driver object.                   */
+  /*                                                                       */
+  /* <Note>                                                                */
+  /*     The driver _must_ be LOCKED!                                      */
+  /*                                                                       */
+  static void
+  Destroy_Module( FT2_1_3_Module  module )
+  {
+    FT2_1_3_Memory         memory  = module->memory;
+    FT2_1_3_Module_Class*  clazz   = module->clazz;
+    FT2_1_3_Library        library = module->library;
+
+
+    /* finalize client-data - before anything else */
+    if ( module->generic.finalizer )
+      module->generic.finalizer( module );
+
+    if ( library && library->auto_hinter == module )
+      library->auto_hinter = 0;
+
+    /* if the module is a renderer */
+    if ( FT2_1_3_MODULE_IS_RENDERER( module ) )
+      ft_remove_renderer( module );
+
+    /* if the module is a font driver, add some steps */
+    if ( FT2_1_3_MODULE_IS_DRIVER( module ) )
+      Destroy_Driver( FT2_1_3_DRIVER( module ) );
+
+    /* finalize the module object */
+    if ( clazz->module_done )
+      clazz->module_done( module );
+
+    /* discard it */
+    FT2_1_3_FREE( module );
+  }
+
+
+  /* documentation is in ftmodule.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Add_Module( FT2_1_3_Library              library,
+                 const FT2_1_3_Module_Class*  clazz )
+  {
+    FT2_1_3_Error   error;
+    FT2_1_3_Memory  memory;
+    FT2_1_3_Module  module;
+    FT2_1_3_UInt    nn;
+
+
+#define FREETYPE_VER_FIXED  ( ( (FT2_1_3_Long)FREETYPE_MAJOR << 16 ) | \
+                                FREETYPE_MINOR                  )
+
+    if ( !library )
+      return FT2_1_3_Err_Invalid_Library_Handle;
+
+    if ( !clazz )
+      return FT2_1_3_Err_Invalid_Argument;
+
+    /* check freetype version */
+    if ( clazz->module_requires > FREETYPE_VER_FIXED )
+      return FT2_1_3_Err_Invalid_Version;
+
+    /* look for a module with the same name in the library's table */
+    for ( nn = 0; nn < library->num_modules; nn++ )
+    {
+      module = library->modules[nn];
+      if ( ft_strcmp( module->clazz->module_name, clazz->module_name ) == 0 )
+      {
+        /* this installed module has the same name, compare their versions */
+        if ( clazz->module_version <= module->clazz->module_version )
+          return FT2_1_3_Err_Lower_Module_Version;
+
+        /* remove the module from our list, then exit the loop to replace */
+        /* it by our new version..                                        */
+        FT2_1_3_Remove_Module( library, module );
+        break;
+      }
+    }
+
+    memory = library->memory;
+    error  = FT2_1_3_Err_Ok;
+
+    if ( library->num_modules >= FT2_1_3_MAX_MODULES )
+    {
+      error = FT2_1_3_Err_Too_Many_Drivers;
+      goto Exit;
+    }
+
+    /* allocate module object */
+    if ( FT2_1_3_ALLOC( module, clazz->module_size ) )
+      goto Exit;
+
+    /* base initialization */
+    module->library = library;
+    module->memory  = memory;
+    module->clazz   = (FT2_1_3_Module_Class*)clazz;
+
+    /* check whether the module is a renderer - this must be performed */
+    /* before the normal module initialization                         */
+    if ( FT2_1_3_MODULE_IS_RENDERER( module ) )
+    {
+      /* add to the renderers list */
+      error = ft_add_renderer( module );
+      if ( error )
+        goto Fail;
+    }
+
+    /* is the module a auto-hinter? */
+    if ( FT2_1_3_MODULE_IS_HINTER( module ) )
+      library->auto_hinter = module;
+
+    /* if the module is a font driver */
+    if ( FT2_1_3_MODULE_IS_DRIVER( module ) )
+    {
+      /* allocate glyph loader if needed */
+      FT2_1_3_Driver  driver = FT2_1_3_DRIVER( module );
+
+
+      driver->clazz = (FT2_1_3_Driver_Class)module->clazz;
+      if ( FT2_1_3_DRIVER_USES_OUTLINES( driver ) )
+      {
+        error = FT2_1_3_GlyphLoader_New( memory, &driver->glyph_loader );
+        if ( error )
+          goto Fail;
+      }
+    }
+
+    if ( clazz->module_init )
+    {
+      error = clazz->module_init( module );
+      if ( error )
+        goto Fail;
+    }
+
+    /* add module to the library's table */
+    library->modules[library->num_modules++] = module;
+
+  Exit:
+    return error;
+
+  Fail:
+    if ( FT2_1_3_MODULE_IS_DRIVER( module ) )
+    {
+      FT2_1_3_Driver  driver = FT2_1_3_DRIVER( module );
+
+
+      if ( FT2_1_3_DRIVER_USES_OUTLINES( driver ) )
+        FT2_1_3_GlyphLoader_Done( driver->glyph_loader );
+    }
+
+    if ( FT2_1_3_MODULE_IS_RENDERER( module ) )
+    {
+      FT2_1_3_Renderer  renderer = FT2_1_3_RENDERER( module );
+
+
+      if ( renderer->raster )
+        renderer->clazz->raster_class->raster_done( renderer->raster );
+    }
+
+    FT2_1_3_FREE( module );
+    goto Exit;
+  }
+
+
+  /* documentation is in ftmodule.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Module )
+  FT2_1_3_Get_Module( FT2_1_3_Library   library,
+                 const char*  module_name )
+  {
+    FT2_1_3_Module   result = 0;
+    FT2_1_3_Module*  cur;
+    FT2_1_3_Module*  limit;
+
+
+    if ( !library || !module_name )
+      return result;
+
+    cur   = library->modules;
+    limit = cur + library->num_modules;
+
+    for ( ; cur < limit; cur++ )
+      if ( ft_strcmp( cur[0]->clazz->module_name, module_name ) == 0 )
+      {
+        result = cur[0];
+        break;
+      }
+
+    return result;
+  }
+
+
+  /* documentation is in ftobjs.h */
+
+  FT2_1_3_BASE_DEF( const void* )
+  FT2_1_3_Get_Module_Interface( FT2_1_3_Library   library,
+                           const char*  mod_name )
+  {
+    FT2_1_3_Module  module;
+
+
+    /* test for valid `library' delayed to FT2_1_3_Get_Module() */
+
+    module = FT2_1_3_Get_Module( library, mod_name );
+
+    return module ? module->clazz->module_interface : 0;
+  }
+
+
+  /* documentation is in ftmodule.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Remove_Module( FT2_1_3_Library  library,
+                    FT2_1_3_Module   module )
+  {
+    /* try to find the module from the table, then remove it from there */
+
+    if ( !library )
+      return FT2_1_3_Err_Invalid_Library_Handle;
+
+    if ( module )
+    {
+      FT2_1_3_Module*  cur   = library->modules;
+      FT2_1_3_Module*  limit = cur + library->num_modules;
+
+
+      for ( ; cur < limit; cur++ )
+      {
+        if ( cur[0] == module )
+        {
+          /* remove it from the table */
+          library->num_modules--;
+          limit--;
+          while ( cur < limit )
+          {
+            cur[0] = cur[1];
+            cur++;
+          }
+          limit[0] = 0;
+
+          /* destroy the module */
+          Destroy_Module( module );
+
+          return FT2_1_3_Err_Ok;
+        }
+      }
+    }
+    return FT2_1_3_Err_Invalid_Driver_Handle;
+  }
+
+
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /****                         L I B R A R Y                           ****/
+  /****                                                                 ****/
+  /****                                                                 ****/
+  /*************************************************************************/
+  /*************************************************************************/
+  /*************************************************************************/
+
+
+  /* documentation is in ftmodule.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_New_Library( FT2_1_3_Memory    memory,
+                  FT2_1_3_Library  *alibrary )
+  {
+    FT2_1_3_Library  library = 0;
+    FT2_1_3_Error    error;
+
+
+    if ( !memory )
+      return FT2_1_3_Err_Invalid_Argument;
+
+#ifdef FT2_1_3_DEBUG_LEVEL_ERROR
+    /* init debugging support */
+    ft_debug_init();
+#endif
+
+    /* first of all, allocate the library object */
+    if ( FT2_1_3_NEW( library ) )
+      return error;
+
+    library->memory = memory;
+
+    /* allocate the render pool */
+    library->raster_pool_size = FT2_1_3_RENDER_POOL_SIZE;
+    if ( FT2_1_3_ALLOC( library->raster_pool, FT2_1_3_RENDER_POOL_SIZE ) )
+      goto Fail;
+
+    /* That's ok now */
+    *alibrary = library;
+
+    return FT2_1_3_Err_Ok;
+
+  Fail:
+    FT2_1_3_FREE( library );
+    return error;
+  }
+
+
+  /* documentation is in freetype.h */
+
+  FT2_1_3_EXPORT_DEF( void )
+  FT2_1_3_Library_Version( FT2_1_3_Library   library,
+                      FT2_1_3_Int      *amajor,
+                      FT2_1_3_Int      *aminor,
+                      FT2_1_3_Int      *apatch )
+  {
+    FT2_1_3_Int  major = 0;
+    FT2_1_3_Int  minor = 0;
+    FT2_1_3_Int  patch = 0;
+
+
+    if ( library )
+    {
+      major = library->version_major;
+      minor = library->version_minor;
+      patch = library->version_patch;
+    }
+
+    if ( amajor )
+      *amajor = major;
+
+    if ( aminor )
+      *aminor = minor;
+
+    if ( apatch )
+      *apatch = patch;
+  }
+
+
+  /* documentation is in ftmodule.h */
+
+  FT2_1_3_EXPORT_DEF( FT2_1_3_Error )
+  FT2_1_3_Done_Library( FT2_1_3_Library  library )
+  {
+    FT2_1_3_Memory  memory;
+
+
+    if ( !library )
+      return FT2_1_3_Err_Invalid_Library_Handle;
+
+    memory = library->memory;
+
+    /* Discard client-data */
+    if ( library->generic.finalizer )
+      library->generic.finalizer( library );
+
+    /* Close all modules in the library */
+#if 1
+    while ( library->num_modules > 0 )
+      FT2_1_3_Remove_Module( library, library->modules[0] );
+#else
+    {
+      FT2_1_3_UInt  n;
+
+
+      for ( n = 0; n < library->num_modules; n++ )
+      {
+        FT2_1_3_Module  module = library->modules[n];
+
+
+        if ( module )
+        {
+          Destroy_Module( module );
+          library->modules[n] = 0;
+        }
+      }
+    }
+#endif
+
+    /* Destroy raster objects */
+    FT2_1_3_FREE( library->raster_pool );
+    library->raster_pool_size = 0;
+
+    FT2_1_3_FREE( library );
+    return FT2_1_3_Err_Ok;
+  }
+
+
+  /* documentation is in ftmodule.h */
+
+  FT2_1_3_EXPORT_DEF( void )
+  FT2_1_3_Set_Debug_Hook( FT2_1_3_Library         library,
+                     FT2_1_3_UInt            hook_index,
+                     FT2_1_3_DebugHook_Func  debug_hook )
+  {
+    if ( library && debug_hook &&
+         hook_index <
+           ( sizeof ( library->debug_hooks ) / sizeof ( void* ) ) )
+      library->debug_hooks[hook_index] = debug_hook;
+  }
+
+
+/* END */

@@ -1,0 +1,575 @@
+/***************************************************************************/
+/*                                                                         */
+/*  cffobjs.c                                                              */
+/*                                                                         */
+/*    OpenType objects manager (body).                                     */
+/*                                                                         */
+/*  Copyright 1996-2001, 2002 by                                           */
+/*  David Turner, Robert Wilhelm, and Werner Lemberg.                      */
+/*                                                                         */
+/*  This file is part of the FreeType project, and may only be used,       */
+/*  modified, and distributed under the terms of the FreeType project      */
+/*  license, LICENSE.TXT.  By continuing to use, modify, or distribute     */
+/*  this file you indicate that you have read the license and              */
+/*  understand and accept it fully.                                        */
+/*                                                                         */
+/***************************************************************************/
+
+
+#include "engines/ags/lib/freetype-2.1.3/include/ft2build.h"
+#include FT2_1_3_INTERNAL_DEBUG_H
+#include FT2_1_3_INTERNAL_CALC_H
+#include FT2_1_3_INTERNAL_STREAM_H
+#include FT2_1_3_ERRORS_H
+#include FT2_1_3_TRUETYPE_IDS_H
+#include FT2_1_3_TRUETYPE_TAGS_H
+#include FT2_1_3_INTERNAL_SFNT_H
+#include FT2_1_3_INTERNAL_POSTSCRIPT_NAMES_H
+#include FT2_1_3_INTERNAL_POSTSCRIPT_HINTS_H
+#include "cffobjs.h"
+#include "cffload.h"
+#include "cffcmap.h"
+#include "cfferrs.h"
+
+
+  /*************************************************************************/
+  /*                                                                       */
+  /* The macro FT2_1_3_COMPONENT is used in trace mode.  It is an implicit      */
+  /* parameter of the FT2_1_3_TRACE() and FT2_1_3_ERROR() macros, used to print/log  */
+  /* messages during execution.                                            */
+  /*                                                                       */
+#undef  FT2_1_3_COMPONENT
+#define FT2_1_3_COMPONENT  trace_cffobjs
+
+
+  /*************************************************************************/
+  /*                                                                       */
+  /*                            SIZE FUNCTIONS                             */
+  /*                                                                       */
+  /*  Note that we store the global hints in the size's "internal" root    */
+  /*  field.                                                               */
+  /*                                                                       */
+  /*************************************************************************/
+
+
+  static PSH_Globals_Funcs
+  cff_size_get_globals_funcs( CFF_Size  size )
+  {
+    CFF_Face          face     = (CFF_Face)size->face;
+    CFF_Font          font     = (CFF_FontRec *)face->extra.data;
+    PSHinter_Service  pshinter = (PSHinter_Service)font->pshinter;
+    FT2_1_3_Module         module;
+
+
+    module = FT2_1_3_Get_Module( size->face->driver->root.library,
+                            "pshinter" );
+    return ( module && pshinter && pshinter->get_globals_funcs )
+           ? pshinter->get_globals_funcs( module )
+           : 0;
+  }
+
+
+  FT2_1_3_LOCAL_DEF( void )
+  cff_size_done( CFF_Size  size )
+  {
+    if ( size->internal )
+    {
+      PSH_Globals_Funcs  funcs;
+
+
+      funcs = cff_size_get_globals_funcs( size );
+      if ( funcs )
+        funcs->destroy( (PSH_Globals)size->internal );
+
+      size->internal = 0;
+    }
+  }
+
+
+  FT2_1_3_LOCAL_DEF( FT2_1_3_Error )
+  cff_size_init( CFF_Size  size )
+  {
+    FT2_1_3_Error           error = 0;
+    PSH_Globals_Funcs  funcs = cff_size_get_globals_funcs( size );
+
+
+    if ( funcs )
+    {
+      PSH_Globals    globals;
+      CFF_Face       face    = (CFF_Face)size->face;
+      CFF_Font       font    = (CFF_FontRec *)face->extra.data;
+      CFF_SubFont    subfont = &font->top_font;
+
+      CFF_Private    cpriv   = &subfont->private_dict;
+      PS_PrivateRec  priv;
+
+
+      /* IMPORTANT: The CFF and Type1 private dictionaries have    */
+      /*            slightly different structures; we need to      */
+      /*            synthetize a type1 dictionary on the fly here. */
+
+      {
+        FT2_1_3_UInt  n, count;
+
+
+        FT2_1_3_MEM_ZERO( &priv, sizeof ( priv ) );
+
+        count = priv.num_blue_values = cpriv->num_blue_values;
+        for ( n = 0; n < count; n++ )
+          priv.blue_values[n] = (FT2_1_3_Short)cpriv->blue_values[n];
+
+        count = priv.num_other_blues = cpriv->num_other_blues;
+        for ( n = 0; n < count; n++ )
+          priv.other_blues[n] = (FT2_1_3_Short)cpriv->other_blues[n];
+
+        count = priv.num_family_blues = cpriv->num_family_blues;
+        for ( n = 0; n < count; n++ )
+          priv.family_blues[n] = (FT2_1_3_Short)cpriv->family_blues[n];
+
+        count = priv.num_family_other_blues = cpriv->num_family_other_blues;
+        for ( n = 0; n < count; n++ )
+          priv.family_other_blues[n] = (FT2_1_3_Short)cpriv->family_other_blues[n];
+
+        priv.blue_scale = cpriv->blue_scale;
+        priv.blue_shift = (FT2_1_3_Int)cpriv->blue_shift;
+        priv.blue_fuzz  = (FT2_1_3_Int)cpriv->blue_fuzz;
+
+        priv.standard_width[0]  = (FT2_1_3_UShort)cpriv->standard_width;
+        priv.standard_height[0] = (FT2_1_3_UShort)cpriv->standard_height;
+
+        count = priv.num_snap_widths = cpriv->num_snap_widths;
+        for ( n = 0; n < count; n++ )
+          priv.snap_widths[n] = (FT2_1_3_Short)cpriv->snap_widths[n];
+
+        count = priv.num_snap_heights = cpriv->num_snap_heights;
+        for ( n = 0; n < count; n++ )
+          priv.snap_heights[n] = (FT2_1_3_Short)cpriv->snap_heights[n];
+
+        priv.force_bold     = cpriv->force_bold;
+        priv.language_group = cpriv->language_group;
+        priv.lenIV          = cpriv->lenIV;
+      }
+
+      error = funcs->create( size->face->memory, &priv, &globals );
+      if ( !error )
+        size->internal = (FT2_1_3_Size_Internal)(void*)globals;
+    }
+
+    return error;
+  }
+
+
+  FT2_1_3_LOCAL_DEF( FT2_1_3_Error )
+  cff_size_reset( CFF_Size  size )
+  {
+    PSH_Globals_Funcs  funcs = cff_size_get_globals_funcs( size );
+    FT2_1_3_Error           error = 0;
+
+
+    if ( funcs )
+      error = funcs->set_scale( (PSH_Globals)size->internal,
+                                 size->metrics.x_scale,
+                                 size->metrics.y_scale,
+                                 0, 0 );
+    return error;
+  }
+
+
+  /*************************************************************************/
+  /*                                                                       */
+  /*                            SLOT  FUNCTIONS                            */
+  /*                                                                       */
+  /*************************************************************************/
+
+  FT2_1_3_LOCAL_DEF( void )
+  cff_slot_done( CFF_GlyphSlot  slot )
+  {
+    slot->root.internal->glyph_hints = 0;
+  }
+
+
+  FT2_1_3_LOCAL_DEF( FT2_1_3_Error )
+  cff_slot_init( CFF_GlyphSlot  slot )
+  {
+    CFF_Face          face     = (CFF_Face)slot->root.face;
+    CFF_Font          font     = (CFF_FontRec *)face->extra.data;
+    PSHinter_Service  pshinter = (PSHinter_Service)font->pshinter;
+
+
+    if ( pshinter )
+    {
+      FT2_1_3_Module  module;
+
+
+      module = FT2_1_3_Get_Module( slot->root.face->driver->root.library,
+                              "pshinter" );
+      if ( module )
+      {
+        T2_Hints_Funcs  funcs;
+
+
+        funcs = pshinter->get_t2_funcs( module );
+        slot->root.internal->glyph_hints = (void*)funcs;
+      }
+    }
+
+    return 0;
+  }
+
+
+  /*************************************************************************/
+  /*                                                                       */
+  /*                           FACE  FUNCTIONS                             */
+  /*                                                                       */
+  /*************************************************************************/
+
+  static FT2_1_3_String*
+  cff_strcpy( FT2_1_3_Memory         memory,
+              const FT2_1_3_String*  source )
+  {
+    FT2_1_3_Error    error;
+    FT2_1_3_String*  result = 0;
+    FT2_1_3_Int      len = (FT2_1_3_Int)ft_strlen( source );
+
+
+    if ( !FT2_1_3_ALLOC( result, len + 1 ) )
+    {
+      FT2_1_3_MEM_COPY( result, source, len );
+      result[len] = 0;
+    }
+
+    FT2_1_3_UNUSED( error );
+
+    return result;
+  }
+
+
+
+
+  FT2_1_3_LOCAL_DEF( FT2_1_3_Error )
+  cff_face_init( FT2_1_3_Stream      stream,
+                 CFF_Face       face,
+                 FT2_1_3_Int         face_index,
+                 FT2_1_3_Int         num_params,
+                 FT2_1_3_Parameter*  params )
+  {
+    FT2_1_3_Error          error;
+    SFNT_Service      sfnt;
+    PSNames_Service   psnames;
+    PSHinter_Service  pshinter;
+    FT2_1_3_Bool           pure_cff    = 1;
+    FT2_1_3_Bool           sfnt_format = 0;
+
+
+    sfnt = (SFNT_Service)FT2_1_3_Get_Module_Interface(
+             face->root.driver->root.library, "sfnt" );
+    if ( !sfnt )
+      goto Bad_Format;
+
+    psnames = (PSNames_Service)FT2_1_3_Get_Module_Interface(
+                face->root.driver->root.library, "psnames" );
+
+    pshinter = (PSHinter_Service)FT2_1_3_Get_Module_Interface(
+                 face->root.driver->root.library, "pshinter" );
+
+    /* create input stream from resource */
+    if ( FT2_1_3_STREAM_SEEK( 0 ) )
+      goto Exit;
+
+    /* check that we have a valid OpenType file */
+    error = sfnt->init_face( stream, face, face_index, num_params, params );
+    if ( !error )
+    {
+      if ( face->format_tag != 0x4F54544FL )  /* `OTTO'; OpenType/CFF font */
+      {
+        FT2_1_3_TRACE2(( "[not a valid OpenType/CFF font]\n" ));
+        goto Bad_Format;
+      }
+
+      /* if we are performing a simple font format check, exit immediately */
+      if ( face_index < 0 )
+        return CFF_Err_Ok;
+
+      sfnt_format = 1;
+
+      /* now, the font can be either an OpenType/CFF font, or an SVG CEF */
+      /* font in the later case; it doesn't have a `head' table          */
+      error = face->goto_table( face, TTAG_head, stream, 0 );
+      if ( !error )
+      {
+        pure_cff = 0;
+
+        /* load font directory */
+        error = sfnt->load_face( stream, face,
+                                 face_index, num_params, params );
+        if ( error )
+          goto Exit;
+      }
+      else
+      {
+        /* load the `cmap' table by hand */
+        error = sfnt->load_charmaps( face, stream );
+        if ( error )
+          goto Exit;
+
+        /* XXX: we don't load the GPOS table, as OpenType Layout     */
+        /* support will be added later to a layout library on top of */
+        /* FreeType 2                                                */
+      }
+
+      /* now, load the CFF part of the file */
+      error = face->goto_table( face, TTAG_CFF, stream, 0 );
+      if ( error )
+        goto Exit;
+    }
+    else
+    {
+      /* rewind to start of file; we are going to load a pure-CFF font */
+      if ( FT2_1_3_STREAM_SEEK( 0 ) )
+        goto Exit;
+      error = CFF_Err_Ok;
+    }
+
+    /* now load and parse the CFF table in the file */
+    {
+      CFF_Font   cff;
+      FT2_1_3_Memory  memory = face->root.memory;
+      FT2_1_3_Face    root;
+      FT2_1_3_Int32   flags;
+
+
+      if ( FT2_1_3_NEW( cff ) )
+        goto Exit;
+
+      face->extra.data = cff;
+      error = cff_font_load( stream, face_index, cff );
+      if ( error )
+        goto Exit;
+
+      cff->pshinter = pshinter;
+      cff->psnames  = psnames;
+
+      /* Complement the root flags with some interesting information. */
+      /* Note that this is only necessary for pure CFF and CEF fonts. */
+
+      root             = &face->root;
+      root->num_glyphs = cff->num_glyphs;
+
+      if ( pure_cff )
+      {
+        CFF_FontRecDict  dict = &cff->top_font.font_dict;
+
+
+        /* we need the `PSNames' module for pure-CFF and CEF formats */
+        if ( !psnames )
+        {
+          FT2_1_3_ERROR(( "cff_face_init:" ));
+          FT2_1_3_ERROR(( " cannot open CFF & CEF fonts\n" ));
+          FT2_1_3_ERROR(( "              " ));
+          FT2_1_3_ERROR(( " without the `PSNames' module\n" ));
+          goto Bad_Format;
+        }
+
+        /* Set up num_faces. */
+        root->num_faces = cff->num_faces;
+
+        /* compute number of glyphs */
+        if ( dict->cid_registry )
+          root->num_glyphs = dict->cid_count;
+        else
+          root->num_glyphs = cff->charstrings_index.count;
+
+        /* set global bbox, as well as EM size */
+        root->bbox.xMin =   dict->font_bbox.xMin             >> 16;
+        root->bbox.yMin =   dict->font_bbox.yMin             >> 16;
+        root->bbox.xMax = ( dict->font_bbox.xMax + 0xFFFFU ) >> 16;
+        root->bbox.yMax = ( dict->font_bbox.yMax + 0xFFFFU ) >> 16;
+
+
+        root->ascender  = (FT2_1_3_Short)( root->bbox.yMax );
+        root->descender = (FT2_1_3_Short)( root->bbox.yMin );
+        root->height    = (FT2_1_3_Short)(
+          ( ( root->ascender - root->descender ) * 12 ) / 10 );
+
+        if ( dict->units_per_em )
+          root->units_per_EM = dict->units_per_em;
+        else
+          root->units_per_EM = 1000;
+
+        /* retrieve font family & style name */
+        root->family_name  = cff_index_get_name( &cff->name_index, face_index );
+        if ( dict->cid_registry )
+          root->style_name = cff_strcpy( memory, "Regular" );  /* XXXX */
+        else
+          root->style_name = cff_index_get_sid_string( &cff->string_index,
+                                                       dict->weight,
+                                                       psnames );
+
+        /*******************************************************************/
+        /*                                                                 */
+        /* Compute face flags.                                             */
+        /*                                                                 */
+        flags = FT2_1_3_FACE_FLAG_SCALABLE  |    /* scalable outlines */
+                FT2_1_3_FACE_FLAG_HORIZONTAL;    /* horizontal data   */
+
+        if ( sfnt_format )
+          flags |= FT2_1_3_FACE_FLAG_SFNT;
+
+        /* fixed width font? */
+        if ( dict->is_fixed_pitch )
+          flags |= FT2_1_3_FACE_FLAG_FIXED_WIDTH;
+
+  /* XXX: WE DO NOT SUPPORT KERNING METRICS IN THE GPOS TABLE FOR NOW */
+#if 0
+        /* kerning available? */
+        if ( face->kern_pairs )
+          flags |= FT2_1_3_FACE_FLAG_KERNING;
+#endif
+
+#ifndef FT2_1_3_CONFIG_OPTION_NO_GLYPH_NAMES
+        flags |= FT2_1_3_FACE_FLAG_GLYPH_NAMES;
+#endif
+
+        root->face_flags = flags;
+
+        /*******************************************************************/
+        /*                                                                 */
+        /* Compute style flags.                                            */
+        /*                                                                 */
+        flags = 0;
+
+        if ( dict->italic_angle )
+          flags |= FT2_1_3_STYLE_FLAG_ITALIC;
+
+        /* XXX: may not be correct */
+        if ( cff->top_font.private_dict.force_bold )
+          flags |= FT2_1_3_STYLE_FLAG_BOLD;
+
+        root->style_flags = flags;
+      }
+
+      /*******************************************************************/
+      /*                                                                 */
+      /* Compute char maps.                                              */
+      /*                                                                 */
+
+      /* Try to synthetize a Unicode charmap if there is none available */
+      /* already.  If an OpenType font contains a Unicode "cmap", we    */
+      /* will use it, whatever be in the CFF part of the file.          */
+      {
+        FT2_1_3_CharMapRec  cmaprec;
+        FT2_1_3_CharMap     cmap;
+        FT2_1_3_UInt        nn;
+        CFF_Encoding   encoding = &cff->encoding;
+
+
+        for ( nn = 0; nn < (FT2_1_3_UInt) root->num_charmaps; nn++ )
+        {
+          cmap = root->charmaps[nn];
+
+          /* Windows Unicode (3,1)? */
+          if ( cmap->platform_id == 3 && cmap->encoding_id == 1 )
+            goto Skip_Unicode;
+
+          /* Deprecated Unicode platform id? */
+          if ( cmap->platform_id == 0 )
+            goto Skip_Unicode; /* Standard Unicode (deprecated) */
+        }
+
+        /* we didn't find a Unicode charmap, synthetize one */
+        cmaprec.face        = root;
+        cmaprec.platform_id = 3;
+        cmaprec.encoding_id = 1;
+        cmaprec.encoding    = FT2_1_3_ENCODING_UNICODE;
+
+        nn = (FT2_1_3_UInt) root->num_charmaps;
+
+        FT2_1_3_CMap_New( &cff_cmap_unicode_class_rec, NULL, &cmaprec, NULL );
+
+        /* if no Unicode charmap was previously selected, select this one */
+        if ( root->charmap == NULL && nn != (FT2_1_3_UInt) root->num_charmaps )
+          root->charmap = root->charmaps[nn];
+
+      Skip_Unicode:
+        if ( encoding->count > 0 )
+        {
+          FT2_1_3_CMap_Class  clazz;
+
+
+          cmaprec.face        = root;
+          cmaprec.platform_id = 7;  /* Adobe platform id */
+
+          if ( encoding->offset == 0 )
+          {
+            cmaprec.encoding_id = 0;
+            cmaprec.encoding    = FT2_1_3_ENCODING_ADOBE_STANDARD;
+            clazz               = &cff_cmap_encoding_class_rec;
+          }
+          else if ( encoding->offset == 1 )
+          {
+            cmaprec.encoding_id = 1;
+            cmaprec.encoding    = FT2_1_3_ENCODING_ADOBE_EXPERT;
+            clazz               = &cff_cmap_encoding_class_rec;
+          }
+          else
+          {
+            cmaprec.encoding_id = 3;
+            cmaprec.encoding    = FT2_1_3_ENCODING_ADOBE_CUSTOM;
+            clazz               = &cff_cmap_encoding_class_rec;
+          }
+
+          FT2_1_3_CMap_New( clazz, NULL, &cmaprec, NULL );
+        }
+
+      }
+    }
+
+  Exit:
+    return error;
+
+  Bad_Format:
+    error = CFF_Err_Unknown_File_Format;
+    goto Exit;
+  }
+
+
+  FT2_1_3_LOCAL_DEF( void )
+  cff_face_done( CFF_Face  face )
+  {
+    FT2_1_3_Memory     memory = face->root.memory;
+    SFNT_Service  sfnt   = (SFNT_Service)face->sfnt;
+
+
+    if ( sfnt )
+      sfnt->done_face( face );
+
+    {
+      CFF_Font  cff = (CFF_Font)face->extra.data;
+
+
+      if ( cff )
+      {
+        cff_font_done( cff );
+        FT2_1_3_FREE( face->extra.data );
+      }
+    }
+  }
+
+
+  FT2_1_3_LOCAL_DEF( FT2_1_3_Error )
+  cff_driver_init( CFF_Driver  driver )
+  {
+    FT2_1_3_UNUSED( driver );
+
+    return CFF_Err_Ok;
+  }
+
+
+  FT2_1_3_LOCAL_DEF( void )
+  cff_driver_done( CFF_Driver  driver )
+  {
+    FT2_1_3_UNUSED( driver );
+  }
+
+
+/* END */

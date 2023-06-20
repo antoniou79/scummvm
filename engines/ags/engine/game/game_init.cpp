@@ -275,6 +275,9 @@ void LoadFonts(GameSetupStruct &game, GameDataVersion data_ver) {
 			// A simple workaround is to disable outline fonts for it and use
 			// automatic outline drawing.
 			const int outline_font = get_font_outline(i);
+			const char *nameDBG = get_font_name(i); // DBG
+			const char *outline_nameDBG = (outline_font < 0) ? "none" : get_font_name(outline_font); // DBG
+			debug("font: %d name: %s, outline-name: %s", i, nameDBG, outline_nameDBG); // DBG
 			if (outline_font < 0)
 				continue;
 			const char *name = get_font_name(i);

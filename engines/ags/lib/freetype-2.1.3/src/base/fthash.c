@@ -1,0 +1,246 @@
+#include "engines/ags/lib/freetype-2.1.3/include/ft2build.h"
+#include FT2_1_3_TYPES_H
+#include FT2_1_3_INTERNAL_HASH_H
+#include FT2_1_3_INTERNAL_MEMORY_H
+#include FT2_1_3_INTERNAL_DEBUG_H
+
+#define  FT2_1_3_HASH_MAX_LOAD  2
+#define  FT2_1_3_HASH_MIN_LOAD  1
+#define  FT2_1_3_HASH_SUB_LOAD  (FT2_1_3_HASH_MAX_LOAD-FT2_1_3_HASH_MIN_LOAD)
+
+/* this one _must_ be a power of 2 !! */
+#define  FT2_1_3_HASH_INITIAL_SIZE  8
+
+
+  FT2_1_3_BASE_DEF( void )
+  ft_hash_done( FT2_1_3_Hash              table,
+                FT2_1_3_Hash_ForeachFunc  node_func,
+                const FT2_1_3_Pointer     node_data )
+  {
+    if ( table )
+    {
+      FT2_1_3_Memory  memory = table->memory;
+
+      if ( node_func )
+        ft_hash_foreach( table, node_func, node_data );
+
+      FT2_1_3_FREE( table->buckets );
+      table->p     = 0;
+      table->mask  = 0;
+      table->slack = 0;
+
+      table->node_equal = NULL;
+    }
+  }
+
+
+  FT2_1_3_BASE_DEF( FT2_1_3_UInt )
+  ft_hash_get_size( FT2_1_3_Hash  table )
+  {
+    FT2_1_3_UInt  result = 0;
+
+    if ( table )
+      result = (table->p + table->mask + 1)*FT2_1_3_HASH_MAX_LOAD - table->slack;
+
+    return result;
+  }
+
+
+
+  FT2_1_3_BASE_DEF( FT2_1_3_Error )
+  ft_hash_init( FT2_1_3_Hash            table,
+                FT2_1_3_Hash_EqualFunc  equal,
+                FT2_1_3_Memory          memory )
+  {
+    FT2_1_3_Error  error;
+
+    table->memory     = memory;
+    table->p          = 0;
+    table->mask       = FT2_1_3_HASH_INITIAL_SIZE-1;
+    table->slack      = FT2_1_3_HASH_INITIAL_SIZE*FT2_1_3_HASH_MAX_LOAD;
+    table->node_equal = equal;
+
+    (void)FT2_1_3_NEW_ARRAY( table->buckets, FT2_1_3_HASH_INITIAL_SIZE*2 );
+
+    return error;
+  }
+
+
+
+  FT2_1_3_BASE_DEF( void )
+  ft_hash_foreach( FT2_1_3_Hash              table,
+                   FT2_1_3_Hash_ForeachFunc  foreach_func,
+                   const FT2_1_3_Pointer     foreach_data )
+  {
+    FT2_1_3_UInt       count = table->p + table->mask + 1;
+    FT2_1_3_HashNode*  pnode = table->buckets;
+    FT2_1_3_HashNode   node, next;
+
+    for ( ; count > 0; count--, pnode++ )
+    {
+      node = *pnode;
+      while ( node )
+      {
+        next = node->link;
+        foreach_func( node, foreach_data );
+        node = next;
+      }
+    }
+  }
+
+
+
+  FT2_1_3_BASE_DEF( FT2_1_3_HashLookup )
+  ft_hash_lookup( FT2_1_3_Hash      table,
+                  FT2_1_3_HashNode  keynode )
+  {
+    FT2_1_3_UInt       index;
+    FT2_1_3_UInt32     hash = keynode->hash;
+    FT2_1_3_HashNode   node, *pnode;
+
+    index = (FT2_1_3_UInt)(hash & table->mask);
+    if ( index < table->p )
+      index = (FT2_1_3_UInt)(hash & (2*table->mask+1));
+
+    pnode = &table->buckets[index];
+    for (;;)
+    {
+      node = *pnode;
+      if ( node == NULL )
+        break;
+
+      if ( node->hash == hash && table->node_equal( node, keynode ) )
+        break;
+
+      pnode = &node->link;
+    }
+
+    return pnode;
+  }
+
+
+
+
+  FT2_1_3_BASE_DEF( FT2_1_3_Error )
+  ft_hash_add( FT2_1_3_Hash        table,
+               FT2_1_3_HashLookup  lookup,
+               FT2_1_3_HashNode    new_node )
+  {
+    FT2_1_3_Error     error = 0;
+
+    /* add it to the hash table */
+    new_node->link = *lookup;
+    *lookup        = new_node;
+
+    if ( --table->slack < 0 )
+    {
+      FT2_1_3_UInt       p     = table->p;
+      FT2_1_3_UInt       mask  = table->mask;
+      FT2_1_3_HashNode   new_list, node, *pnode;
+
+      /* split a single bucket */
+      new_list = NULL;
+      pnode    = table->buckets + p;
+      for (;;)
+      {
+        node = *pnode;
+        if ( node == NULL )
+          break;
+
+        if ( node->hash & mask )
+        {
+          *pnode     = node->link;
+          node->link = new_list;
+          new_list   = node;
+        }
+        else
+          pnode = &node->link;
+      }
+
+      table->buckets[ p + mask + 1 ] = new_list;
+
+      table->slack += FT2_1_3_HASH_MAX_LOAD;
+
+      if ( p >= mask )
+      {
+        FT2_1_3_Memory  memory = table->memory;
+
+
+        if (FT2_1_3_RENEW_ARRAY( table->buckets, (mask+1)*2, (mask+1)*4 ))
+          goto Exit;
+
+        table->mask = 2*mask + 1;
+        table->p    = 0;
+      }
+      else
+        table->p = p + 1;
+    }
+  Exit:
+    return error;
+  }
+
+
+
+  FT2_1_3_BASE_DEF( FT2_1_3_Error )
+  ft_hash_remove( FT2_1_3_Hash        table,
+                  FT2_1_3_HashLookup  lookup )
+  {
+    FT2_1_3_HashNode  node;
+    FT2_1_3_UInt      num_buckets;
+    FT2_1_3_Error     error = 0;
+
+    FT2_1_3_ASSERT( pnode != NULL && node != NULL );
+
+    node       = *lookup;
+    *lookup    = node->link;
+    node->link = NULL;
+
+    num_buckets = ( table->p + table->mask + 1) ;
+
+    if ( ++ table->slack > (FT2_1_3_Long)num_buckets*FT2_1_3_HASH_SUB_LOAD )
+    {
+      FT2_1_3_UInt       p         = table->p;
+      FT2_1_3_UInt       mask      = table->mask;
+      FT2_1_3_UInt       old_index = p + mask;
+      FT2_1_3_HashNode*  pnode;
+      FT2_1_3_HashNode*  pold;
+
+      if ( old_index < FT2_1_3_HASH_INITIAL_SIZE )
+        goto Exit;
+
+      if ( p == 0 )
+      {
+        FT2_1_3_Memory  memory = table->memory;
+
+        table->mask >>= 1;
+        p             = table->mask;
+
+        if ( FT2_1_3_RENEW_ARRAY( table->buckets, (mask+1)*2, (mask+1) ) )
+        {
+          /* this should never happen normally, but who knows :-)   */
+          /* we need to re-inject the node in the hash table before */
+          /* returning there, since it's safer                      */
+          pnode      = table->buckets;
+          node->link = *pnode;
+          *pnode     = node;
+
+          goto Exit;
+        }
+      }
+      else
+        p--;
+
+      pnode = table->buckets + p;
+      while ( *pnode )
+        pnode = &(*pnode)->link;
+
+      pold   = table->buckets + old_index;
+      *pnode = *pold;
+      *pold  = NULL;
+
+      table->slack -= FT2_1_3_HASH_MAX_LOAD;
+      table->p      = p;
+    }
+  Exit:
+    return error;
+  }

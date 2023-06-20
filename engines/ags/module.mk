@@ -12,6 +12,36 @@ MODULE_OBJS = \
 	lib/aastr-0.1.1/aarot.o \
 	lib/aastr-0.1.1/aastr.o \
 	lib/aastr-0.1.1/aautil.o \
+	lib/freetype-2.1.3/src/base/ftbase.o \
+	lib/freetype-2.1.3/src/base/ftglyph.o \
+	lib/freetype-2.1.3/src/base/ftinit.o \
+	lib/freetype-2.1.3/src/base/ftmm.o \
+	lib/freetype-2.1.3/src/autohint/autohint.o \
+	lib/freetype-2.1.3/src/bdf/bdf.o \
+	lib/freetype-2.1.3/src/cache/ftcache.o \
+	lib/freetype-2.1.3/src/cff/cff.o \
+	lib/freetype-2.1.3/src/cid/type1cid.o \
+	lib/freetype-2.1.3/src/gzip/ftgzip.o \
+	lib/freetype-2.1.3/src/pcf/pcf.o \
+	lib/freetype-2.1.3/src/pfr/pfr.o \
+	lib/freetype-2.1.3/src/psaux/psaux.o \
+	lib/freetype-2.1.3/src/pshinter/pshinter.o \
+	lib/freetype-2.1.3/src/psnames/psmodule.o \
+	lib/freetype-2.1.3/src/raster/raster.o \
+	lib/freetype-2.1.3/src/sfnt/sfnt.o \
+	lib/freetype-2.1.3/src/smooth/smooth.o \
+	lib/freetype-2.1.3/src/truetype/truetype.o \
+	lib/freetype-2.1.3/src/type1/type1.o \
+	lib/freetype-2.1.3/src/type42/type42.o \
+	lib/freetype-2.1.3/src/winfonts/winfnt.o \
+	lib/freetype-2.1.3/src/base/ftbbox.o \
+	lib/freetype-2.1.3/src/base/ftbdf.o \
+	lib/freetype-2.1.3/src/base/ftpfr.o \
+	lib/freetype-2.1.3/src/base/fttype1.o \
+	lib/freetype-2.1.3/src/base/ftxf86.o \
+	lib/freetype-2.1.3/src/base/ftsystem.o \
+	lib/freetype-2.1.3/builds/win32/ftdebug.o \
+	lib/freetype-2.1.3/freetype.o \
 	lib/alfont/alfont.o \
 	lib/allegro/color.o \
 	lib/allegro/config.o \
